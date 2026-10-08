@@ -1,6 +1,8 @@
 # Roadmap
 
-Feature audit and priorities for unqueue.dev. Last reviewed: 2026-08-12.
+Feature audit and priorities for unqueue.dev. Last reviewed: 2026-10-07.
+
+See [docs/upgrade-plan.md](./docs/upgrade-plan.md) for the October 2026 platform upgrade (search, add/replay, error triage, queues page, shortcuts, auth polish).
 
 ## Current Feature Set
 
@@ -45,7 +47,10 @@ Implemented. See [Scheduler Feature](./docs/scheduler-feature.md) for details.
 - RBAC: viewer for read, member for run, admin for edit/remove
 - Note: Pause/resume not available in BullMQ v5 — remove scheduler to stop, recreate to resume
 
-#### Error Triage & Failure Grouping
+#### ~~Error Triage & Failure Grouping~~ ✅ (partial)
+
+Implemented: grouping by job name + normalised error message, first/last seen, retry/remove whole group. Still missing: frequency trends over time.
+
 
 Workbench groups failures by error class, ranks by frequency, and trends over time to spot regressions immediately.
 
@@ -59,7 +64,10 @@ Workbench groups failures by error class, ranks by frequency, and trends over ti
 
 ### P1 — High
 
-#### Job Replay
+#### ~~Job Replay~~ ✅
+
+Implemented: replay as-is, edit & replay, manual Add job dialog.
+
 
 Some tools let you "replay" failed jobs by copying the payload into a new job, not just retrying the existing one. Some also offer a manual enqueue form.
 
@@ -102,7 +110,10 @@ BullMQ has first-class OTel support (`bullmq-otel`) with distributed tracing and
 - No OTLP metrics endpoint
 - No span visualization for job lifecycle
 
-#### Keyboard Shortcuts
+#### ~~Keyboard Shortcuts~~ ✅
+
+Implemented: `?` help, `g o/q/s/b` navigation, `/` search, `j/k/x/↵`, `n` add job, `r/e/c` in job panel, palette actions.
+
 
 Workbench: `⌘K` search, `⌥1-9` switch queues, `R` retry, `↵` drill in. Every action one keystroke away.
 
@@ -124,7 +135,8 @@ Competitors support Slack, email, PagerDuty, webhooks, and Linear.
 
 ### P3 — Nice to Have
 
-#### Job Payload Editing Before Retry
+#### ~~Job Payload Editing Before Retry~~ ✅ (via Edit & replay)
+
 
 Some tools let you edit a job's payload or modify retry options (delay, attempts) before retrying.
 
@@ -174,11 +186,11 @@ Workbench supports `tags` from job data fields to make them filterable in the UI
 | Queue discovery | ✅ Auto | ✅ Manual | ✅ Auto | ✅ Auto | ✅ Auto |
 | Realtime updates | ✅ Socket.IO | ✅ SSE | ✅ SSE | ✅ Polling | ✅ Polling |
 | Job inspection | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Job actions | ✅ Retry/remove/promote | ✅ + replay | ✅ + replay | ✅ + replay | ✅ Retry/remove |
+| Job actions | ✅ Retry/remove/promote + replay/edit/add | ✅ + replay | ✅ + replay | ✅ + replay | ✅ Retry/remove |
 | Queue admin | ✅ Pause/drain/clean/obliterate | ✅ | ✅ | ✅ | ✅ |
 | FlowProducer DAG | ❌ | ✅ | ✅ | ❌ | ✅ |
 | Scheduler management | ✅ | ✅ | ❌ | ✅ | ❌ |
-| Error grouping | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Error grouping | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Metrics/charts | ✅ In-memory | ✅ Built-in | ❌ | ✅ | ✅ |
 | Prometheus export | ❌ | ❌ | ❌ | ✅ | ❌ |
 | OpenTelemetry | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -186,7 +198,7 @@ Workbench supports `tags` from job data fields to make them filterable in the UI
 | Auth/RBAC | ✅ Full | ✅ Basic auth | ❌ | ❌ | ❌ |
 | Multi-workspace | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Bookmarks | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Keyboard shortcuts | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Keyboard shortcuts | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Self-hosted | ✅ Docker | ✅ Docker/npm | ✅ Docker | ✅ Docker | ❌ Hosted |
 
 ## Test Coverage Gaps

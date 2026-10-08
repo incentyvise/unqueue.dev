@@ -1,12 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { z } from "zod";
 import {
   ActivityIcon,
   BarChart2Icon,
   ChevronDownIcon,
   ClockIcon,
+  DownloadIcon,
+  GaugeIcon,
   InboxIcon,
+  SearchIcon,
+  XCircleIcon,
   TrendingDownIcon,
   ZapIcon,
 } from "lucide-react";
@@ -25,9 +30,25 @@ import { ScrollArea } from "@unqueue/ui/components/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { RoutePending } from "@/lib/route-pending";
-import { onSocketEvent } from "@/lib/socket";
+import { useQueueMetricsLive } from "@/hooks/use-queue-metrics-live";
+import { queueKey } from "@/lib/queue-health";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { EnvironmentHistoryCharts } from "@/components/environment-history-charts";
+
+const RANGES = [
+  { key: "1h", label: "1H", hours: 1 },
+  { key: "6h", label: "6H", hours: 6 },
+  { key: "24h", label: "24H", hours: 24 },
+  { key: "7d", label: "7D", hours: 168 },
+  { key: "30d", label: "30D", hours: 720 },
+] as const;
+type RangeKey = (typeof RANGES)[number]["key"];
 
 export const Route = createFileRoute("/$workspaceId/$environmentId/stats")({
+  validateSearch: z.object({
+    range: z.enum(["1h", "6h", "24h", "7d", "30d"]).optional(),
+  }),
   pendingComponent: RoutePending,
   component: StatsPage,
 });
@@ -53,65 +74,6 @@ function fmtThroughput(n: number) {
   if (n === 0) return "0/min";
   if (n < 0.1) return "<0.1/min";
   return `${n.toFixed(1)}/min`;
-}
-
-// ─── live metrics hook ────────────────────────────────────────────────────────
-
-function parseQueueRoom(
-  room: string,
-): { redisInstanceId: string; queueName: string } | null {
-  if (!room.startsWith("queue:")) return null;
-  const rest = room.slice("queue:".length);
-  const sep = rest.indexOf(":");
-  if (sep === -1) return null;
-  return {
-    redisInstanceId: rest.slice(0, sep),
-    queueName: rest.slice(sep + 1),
-  };
-}
-
-function useQueueMetricsLive(queues: EnvironmentQueueRow[]) {
-  const [metrics, setMetrics] = useState<Record<string, QueueMetrics>>({});
-
-  useEffect(() => {
-    if (queues.length === 0) return;
-    let cancelled = false;
-
-    void Promise.all(
-      queues.map(async (q) => {
-        try {
-          const key = `${q.redisInstanceId}:${q.name}`;
-          const m = await rpcClient.queue.getMetrics({
-            redisInstanceId: q.redisInstanceId,
-            queueName: q.name,
-            window: "5m",
-          });
-          if (!cancelled) {
-            setMetrics((prev) => ({ ...prev, [key]: m }));
-          }
-        } catch {}
-      }),
-    );
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queues.map((q) => `${q.redisInstanceId}:${q.name}`).join(",")]);
-
-  useEffect(() => {
-    return onSocketEvent((data) => {
-      if (data.type !== "metrics:update") return;
-      const parsed = parseQueueRoom(data.room);
-      if (!parsed) return;
-      const key = `${parsed.redisInstanceId}:${parsed.queueName}`;
-      const payload = data.payload as { metrics?: QueueMetrics };
-      if (!payload?.metrics) return;
-      setMetrics((prev) => ({ ...prev, [key]: payload.metrics! }));
-    });
-  }, []);
-
-  return metrics;
 }
 
 // ─── summary cards ────────────────────────────────────────────────────────────
@@ -417,10 +379,146 @@ function InstanceSection({
   );
 }
 
+// ─── leaderboards ─────────────────────────────────────────────────────────────
+
+type LeaderRow = { queue: EnvironmentQueueRow; value: number; label: string };
+
+function Leaderboard({
+  title,
+  icon: Icon,
+  rows,
+  empty,
+  tone,
+  workspaceId,
+  environmentId,
+}: {
+  title: string;
+  icon: LucideIcon;
+  rows: LeaderRow[];
+  empty: string;
+  tone: "destructive" | "amber" | "blue";
+  workspaceId: string;
+  environmentId: string;
+}) {
+  const max = Math.max(...rows.map((r) => r.value), 0) || 1;
+  const bar = {
+    destructive: "bg-destructive/15",
+    amber: "bg-amber-500/15",
+    blue: "bg-blue-500/15",
+  }[tone];
+
+  return (
+    <div className="rounded-xl border bg-card">
+      <div className="flex items-center gap-2 border-b px-4 py-2.5">
+        <Icon className="size-3.5 text-muted-foreground" />
+        <p className="text-xs font-medium">{title}</p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="px-4 py-6 text-center text-xs text-muted-foreground">{empty}</p>
+      ) : (
+        <ol className="space-y-0.5 p-1.5">
+          {rows.map((row, i) => (
+            <li key={queueKey(row.queue)}>
+              <Link
+                to="/$workspaceId/$environmentId/queues/$queueName"
+                params={{ workspaceId, environmentId, queueName: row.queue.name }}
+                search={{ redisInstanceId: row.queue.redisInstanceId }}
+                className="relative flex items-center gap-2 overflow-hidden rounded-md px-2.5 py-1.5 text-xs hover:bg-muted/50"
+              >
+                <span
+                  className={cn("absolute inset-y-0 left-0 rounded-md", bar)}
+                  style={{ width: `${(row.value / max) * 100}%` }}
+                  aria-hidden
+                />
+                <span className="relative w-4 text-[10px] text-muted-foreground tabular-nums">
+                  {i + 1}
+                </span>
+                <span className="relative min-w-0 flex-1 truncate font-mono">
+                  {row.queue.name}
+                </span>
+                <span className="relative font-mono tabular-nums">{row.label}</span>
+              </Link>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function csvEscape(value: string | number) {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function exportCsv(
+  queues: EnvironmentQueueRow[],
+  metrics: Record<string, QueueMetrics>,
+  redisNames: Map<string, string>,
+) {
+  const header = [
+    "connection",
+    "queue",
+    "paused",
+    "waiting",
+    "active",
+    "delayed",
+    "failed",
+    "completed",
+    "workers",
+    "throughput_per_min_5m",
+    "failure_rate_5m",
+    "p95_runtime_ms_5m",
+    "p95_wait_ms_5m",
+  ];
+  const lines = queues.map((q) => {
+    const m = metrics[queueKey(q)];
+    return [
+      redisNames.get(q.redisInstanceId) ?? q.redisInstanceId,
+      q.name,
+      q.isPaused ? "yes" : "no",
+      q.counts.waiting,
+      q.counts.active,
+      q.counts.delayed,
+      q.counts.failed,
+      q.counts.completed,
+      q.workers,
+      m ? m.throughputPerMinute.toFixed(3) : "",
+      m ? m.failureRate.toFixed(4) : "",
+      m ? Math.round(m.p95RuntimeMs) : "",
+      m ? Math.round(m.p95WaitMs) : "",
+    ]
+      .map(csvEscape)
+      .join(",");
+  });
+  const blob = new Blob([[header.join(","), ...lines].join("\n")], {
+    type: "text/csv",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `unqueue-stats-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // ─── page ─────────────────────────────────────────────────────────────────────
 
 function StatsPage() {
   const { workspaceId, environmentId } = Route.useParams();
+  const { range: rangeParam } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const range: RangeKey = rangeParam ?? "24h";
+  const rangeHours = RANGES.find((r) => r.key === range)!.hours;
+  const [filter, setFilter] = useState("");
+
+  const historyQuery = useQuery({
+    queryKey: ["env-history", environmentId, rangeHours],
+    queryFn: () =>
+      rpcClient.stats.getEnvironmentHistory({ environmentId, hours: rangeHours }),
+    refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
+  });
 
   const redisQuery = useQuery(environmentRedisQueryOptions(environmentId));
   const queuesQuery = useQuery(environmentQueuesQueryOptions(environmentId));
@@ -438,15 +536,60 @@ function StatsPage() {
   useEnvironmentQueueSync(environmentId, queues, redisInstanceIds);
   const liveMetrics = useQueueMetricsLive(queues);
 
+  const redisNames = useMemo(
+    () => new Map(redisInstances.map((r) => [r.id, r.nickname || "Unnamed"])),
+    [redisInstances],
+  );
+
+  const leaderboards = useMemo(() => {
+    const withMetrics = queues.map((queue) => ({
+      queue,
+      m: liveMetrics[queueKey(queue)],
+    }));
+    const failing = withMetrics
+      .filter(({ m }) => m && m.totalInWindow > 0 && m.failureRate > 0)
+      .sort((a, b) => b.m!.failureRate - a.m!.failureRate)
+      .slice(0, 5)
+      .map(({ queue, m }) => ({
+        queue,
+        value: m!.failureRate,
+        label: fmtRate(m!.failureRate),
+      }));
+    const slowest = withMetrics
+      .filter(({ m }) => m && m.p95RuntimeMs > 0)
+      .sort((a, b) => b.m!.p95RuntimeMs - a.m!.p95RuntimeMs)
+      .slice(0, 5)
+      .map(({ queue, m }) => ({
+        queue,
+        value: m!.p95RuntimeMs,
+        label: fmtMs(m!.p95RuntimeMs),
+      }));
+    const busiest = withMetrics
+      .filter(({ m }) => m && m.throughputPerMinute > 0)
+      .sort((a, b) => b.m!.throughputPerMinute - a.m!.throughputPerMinute)
+      .slice(0, 5)
+      .map(({ queue, m }) => ({
+        queue,
+        value: m!.throughputPerMinute,
+        label: fmtThroughput(m!.throughputPerMinute),
+      }));
+    return { failing, slowest, busiest };
+  }, [queues, liveMetrics]);
+
+  const filteredQueues = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    return needle ? queues.filter((q) => q.name.toLowerCase().includes(needle)) : queues;
+  }, [queues, filter]);
+
   const queuesByInstance = useMemo(() => {
     const map = new Map<string, EnvironmentQueueRow[]>();
-    for (const q of queues) {
+    for (const q of filteredQueues) {
       const arr = map.get(q.redisInstanceId) ?? [];
       arr.push(q);
       map.set(q.redisInstanceId, arr);
     }
     return map;
-  }, [queues]);
+  }, [filteredQueues]);
 
   const summary = useMemo(() => {
     let totalActive = 0,
@@ -462,7 +605,7 @@ function StatsPage() {
       totalWaiting += q.counts.waiting;
       totalDelayed += q.counts.delayed;
       totalFailed += q.counts.failed;
-      const m = liveMetrics[`${q.redisInstanceId}:${q.name}`];
+      const m = liveMetrics[queueKey(q)];
       if (m) {
         totalThroughput += m.throughputPerMinute;
         totalCompleted += m.completedInWindow;
@@ -511,19 +654,58 @@ function StatsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
-        <BarChart2Icon className="size-4 text-muted-foreground" />
-        <h1 className="text-sm font-semibold">Stats</h1>
-        {redisInstances.length > 0 && (
-          <span className="ml-auto text-xs text-muted-foreground">
-            {redisInstances.length} instance
-            {redisInstances.length !== 1 ? "s" : ""}
-          </span>
-        )}
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="flex items-center gap-2 font-medium">
+            <BarChart2Icon className="size-4 text-muted-foreground" />
+            Stats
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            Throughput, failures and latency across {redisInstances.length}{" "}
+            {redisInstances.length === 1 ? "connection" : "connections"}
+          </p>
+        </div>
+        <div
+          className="flex items-center rounded-lg border bg-muted/30 p-0.5"
+          role="tablist"
+          aria-label="Time range"
+        >
+          {RANGES.map((r) => (
+            <button
+              key={r.key}
+              type="button"
+              role="tab"
+              aria-selected={range === r.key}
+              onClick={() =>
+                void navigate({
+                  search: { range: r.key === "24h" ? undefined : r.key },
+                  replace: true,
+                })
+              }
+              className={cn(
+                "rounded-md px-2.5 py-1 font-mono text-[11px] transition-colors",
+                range === r.key
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={queues.length === 0}
+          onClick={() => exportCsv(queues, liveMetrics, redisNames)}
+        >
+          <DownloadIcon />
+          Export CSV
+        </Button>
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="space-y-4 p-4">
+        <div className="mx-auto max-w-7xl space-y-4 p-4">
           {queues.length > 0 && (
             <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
               <SummaryCard
@@ -569,6 +751,62 @@ function StatsPage() {
                 }
                 loading={isLoading}
               />
+            </div>
+          )}
+
+          {redisInstances.length > 0 && (
+            <EnvironmentHistoryCharts
+              points={historyQuery.data?.points ?? []}
+              rangeHours={rangeHours}
+              isLoading={historyQuery.isLoading}
+            />
+          )}
+
+          {queues.length > 0 && (
+            <div className="grid gap-3 lg:grid-cols-3">
+              <Leaderboard
+                title="Highest failure rate · 5m"
+                icon={XCircleIcon}
+                rows={leaderboards.failing}
+                empty="No failures in the last 5 minutes 🎉"
+                tone="destructive"
+                workspaceId={workspaceId}
+                environmentId={environmentId}
+              />
+              <Leaderboard
+                title="Slowest P95 runtime · 5m"
+                icon={GaugeIcon}
+                rows={leaderboards.slowest}
+                empty="No completed jobs in the last 5 minutes"
+                tone="amber"
+                workspaceId={workspaceId}
+                environmentId={environmentId}
+              />
+              <Leaderboard
+                title="Busiest queues · 5m"
+                icon={ZapIcon}
+                rows={leaderboards.busiest}
+                empty="Nothing processed in the last 5 minutes"
+                tone="blue"
+                workspaceId={workspaceId}
+                environmentId={environmentId}
+              />
+            </div>
+          )}
+
+          {queues.length > 0 && (
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <h2 className="text-sm font-medium">Per-queue breakdown</h2>
+              <div className="relative w-56">
+                <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  placeholder="Filter queues"
+                  className="h-8 pl-8 text-xs"
+                  aria-label="Filter queues"
+                />
+              </div>
             </div>
           )}
 

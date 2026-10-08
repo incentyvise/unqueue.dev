@@ -14,6 +14,8 @@ export function isPublicPath(pathname: string) {
     pathname === "/login" ||
     pathname === "/signup" ||
     pathname === "/verify-email" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password" ||
     pathname.startsWith("/invite/")
   );
 }

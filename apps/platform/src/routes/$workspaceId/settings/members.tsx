@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useConfirm } from "@/components/confirm-provider";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import { useState } from "react";
@@ -376,6 +377,7 @@ function EditMemberForm({
   const [formError, setFormError] = useState<string | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState("");
   const [isRemoving, setIsRemoving] = useState(false);
+  const confirm = useConfirm();
 
   const editable = canManageTarget(actorRole, member.role);
   const isSelf = member.userId === currentUserId;
@@ -391,6 +393,20 @@ function EditMemberForm({
       }
 
       setFormError(null);
+
+      const ok = await confirm({
+        title: "Change member role?",
+        description: (
+          <>
+            <span className="font-medium">{member.name || member.email}</span> will go from{" "}
+            <span className="font-medium">{member.role}</span> to{" "}
+            <span className="font-medium">{value.role}</span>. Their permissions change
+            immediately.
+          </>
+        ),
+        confirmLabel: "Change role",
+      });
+      if (!ok) return;
 
       try {
         await rpcClient.members.updateRole({
@@ -562,6 +578,7 @@ function EditInviteForm({
 }) {
   const [formError, setFormError] = useState<string | null>(null);
   const [isRevoking, setIsRevoking] = useState(false);
+  const confirm = useConfirm();
   const editable = canManageTarget(actorRole, invite.role);
   const roles = assignableRoles(actorRole);
 
@@ -574,6 +591,19 @@ function EditInviteForm({
       }
 
       setFormError(null);
+
+      const ok = await confirm({
+        title: "Change invite role?",
+        description: (
+          <>
+            When <span className="font-medium">{invite.email}</span> accepts, they&apos;ll join as{" "}
+            <span className="font-medium">{value.role}</span> instead of{" "}
+            <span className="font-medium">{invite.role}</span>.
+          </>
+        ),
+        confirmLabel: "Change role",
+      });
+      if (!ok) return;
 
       try {
         await rpcClient.members.updateInvite({
@@ -590,6 +620,18 @@ function EditInviteForm({
   });
 
   const handleRevoke = async () => {
+    const ok = await confirm({
+      title: "Revoke invite?",
+      description: (
+        <>
+          The invite link sent to <span className="font-medium">{invite.email}</span> will stop
+          working. You can invite them again later.
+        </>
+      ),
+      confirmLabel: "Revoke invite",
+      destructive: true,
+    });
+    if (!ok) return;
     setIsRevoking(true);
     setFormError(null);
 

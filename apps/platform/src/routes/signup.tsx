@@ -9,14 +9,17 @@ import {
   refreshSession,
   resolveAuthenticatedLanding,
 } from "@/lib/auth-helpers";
-import { formatAuthError, signupSchema } from "@/lib/auth-form";
+import { formatAuthError, setLastEmail, signupSchema } from "@/lib/auth-form";
 import { sessionQueryOptions } from "@/lib/session-query";
 import {
   AuthFieldError,
   AuthFormError,
   AuthLayout,
 } from "@/components/auth/auth-layout";
-import { PasswordInput } from "@/components/auth/password-input";
+import {
+  PasswordInput,
+  PasswordStrengthMeter,
+} from "@/components/auth/password-input";
 import { VerificationNotice } from "@/components/auth/verification-notice";
 import { Button } from "@unqueue/ui/components/button";
 import { Input } from "@unqueue/ui/components/input";
@@ -85,6 +88,8 @@ function SignupPage() {
         return;
       }
 
+      setLastEmail(parsed.data.email);
+
       const session = await refreshSession(queryClient);
       if (session.data?.user) {
         navigate({ to: "/" });
@@ -126,7 +131,10 @@ function SignupPage() {
         title="Redirecting"
         description="Taking you to your workspace."
       >
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="size-3.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+          Loading your workspace…
+        </div>
       </AuthLayout>
     );
   }
@@ -134,7 +142,7 @@ function SignupPage() {
   return (
     <AuthLayout
       title="Create your account"
-      description="Get started with Unqueue in a few seconds."
+      description="Free for solo devs and small teams. Connect Redis in under a minute."
       footer={
         <>
           Already have an account?{" "}
@@ -169,6 +177,7 @@ function SignupPage() {
               <Input
                 id="signup-name"
                 autoComplete="name"
+                autoFocus
                 placeholder="Jane Doe"
                 value={field.state.value}
                 onChange={(e) => {
@@ -244,6 +253,7 @@ function SignupPage() {
                 aria-invalid={!!field.state.meta.errors.length}
                 disabled={form.state.isSubmitting}
               />
+              <PasswordStrengthMeter password={field.state.value} />
               <AuthFieldError message={field.state.meta.errors[0]} />
             </div>
           )}
@@ -259,6 +269,9 @@ function SignupPage() {
         >
           Create account
         </Button>
+        <p className="text-center text-[11px] text-muted-foreground">
+          No credit card. We&apos;ll email you a link to verify your address.
+        </p>
       </form>
     </AuthLayout>
   );

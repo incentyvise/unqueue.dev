@@ -10,7 +10,13 @@ import {
   resolveAuthenticatedLanding,
   safeRedirectPath,
 } from "@/lib/auth-helpers";
-import { formatAuthError, isEmailNotVerifiedError, loginSchema } from "@/lib/auth-form";
+import {
+  formatAuthError,
+  getLastEmail,
+  isEmailNotVerifiedError,
+  loginSchema,
+  setLastEmail,
+} from "@/lib/auth-form";
 import { sessionQueryOptions } from "@/lib/session-query";
 import {
   AuthFieldError,
@@ -69,8 +75,10 @@ function LoginPage() {
     };
   }, [navigate, queryClient, user]);
 
+  const [rememberedEmail] = useState(getLastEmail);
+
   const form = useForm({
-    defaultValues: { email: "", password: "" },
+    defaultValues: { email: rememberedEmail, password: "" },
     onSubmit: async ({ value }) => {
       const parsed = loginSchema.safeParse(value);
       if (!parsed.success) {
@@ -95,6 +103,7 @@ function LoginPage() {
         return;
       }
 
+      setLastEmail(parsed.data.email);
       const session = await refreshSession(queryClient);
       if (!session.data?.user) {
         setFormError("Sign in succeeded but no session was created. Try again.");
@@ -133,7 +142,10 @@ function LoginPage() {
         title="Redirecting"
         description="Taking you to your workspace."
       >
-        <p className="text-sm text-muted-foreground">Loading...</p>
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <span className="size-3.5 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+          Loading your workspace…
+        </div>
       </AuthLayout>
     );
   }
@@ -141,12 +153,12 @@ function LoginPage() {
   return (
     <AuthLayout
       title="Welcome back"
-      description="Sign in to your account to continue."
+      description="Sign in to check on your queues."
       footer={
         <>
-          Don&apos;t have an account?{" "}
+          New to Unqueue?{" "}
           <Link to="/signup" className="font-medium text-foreground hover:underline">
-            Create one
+            Create a free account
           </Link>
         </>
       }
@@ -178,6 +190,7 @@ function LoginPage() {
                 id="login-email"
                 type="email"
                 autoComplete="email"
+                autoFocus={!rememberedEmail}
                 placeholder="you@company.com"
                 value={field.state.value}
                 onChange={(e) => {
@@ -202,10 +215,25 @@ function LoginPage() {
         >
           {(field) => (
             <div className="space-y-1.5">
-              <Label htmlFor="login-password">Password</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="login-password">Password</Label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate({
+                      to: "/forgot-password",
+                      search: { email: form.getFieldValue("email").trim() || undefined },
+                    })
+                  }
+                  className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                >
+                  Forgot password?
+                </button>
+              </div>
               <PasswordInput
                 id="login-password"
                 autoComplete="current-password"
+                autoFocus={!!rememberedEmail}
                 placeholder="Enter your password"
                 value={field.state.value}
                 onChange={(e) => {

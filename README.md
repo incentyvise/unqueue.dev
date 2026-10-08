@@ -4,12 +4,16 @@ Realtime operational dashboard for BullMQ. AGPL-3.0 licensed.
 
 ## Features
 
-- Queue observability with auto-discovery
-- Live job inspection, structured logs, and progress
+- Queue observability with auto-discovery, health filters, pinning, and sorting
+- Job search by ID, name, failure reason, or payload text
+- Failures grouped by job name + normalised error, with retry/remove per group
+- Add jobs manually, or edit a job's payload and replay it
+- Live job inspection, structured logs (filterable by level), and progress
 - Socket.IO realtime updates
-- In-memory rolling-window metrics
-- Job and queue admin actions
-- Workspace RBAC with email/password auth
+- In-memory rolling-window metrics plus 30-day environment history charts and CSV export
+- Job and queue admin actions with toast feedback and confirmations
+- Keyboard-first: `⌘K` palette, `/` search, `j`/`k` navigation, `?` for all shortcuts
+- Workspace RBAC with email/password auth, password reset
 - Bookmarks and Discord alerts
 
 ## Requirements

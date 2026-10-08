@@ -11,7 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as WorkspaceIdRouteImport } from './routes/$workspaceId'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InviteTokenRouteImport } from './routes/invite/$token'
@@ -24,6 +26,7 @@ import { Route as WorkspaceIdSettingsMembersRouteImport } from './routes/$worksp
 import { Route as WorkspaceIdSettingsEnvironmentsRouteImport } from './routes/$workspaceId/settings/environments'
 import { Route as WorkspaceIdSettingsAlertsRouteImport } from './routes/$workspaceId/settings/alerts'
 import { Route as WorkspaceIdEnvironmentIdStatsRouteImport } from './routes/$workspaceId/$environmentId/stats'
+import { Route as WorkspaceIdEnvironmentIdQueuesIndexRouteImport } from './routes/$workspaceId/$environmentId/queues/index'
 import { Route as WorkspaceIdEnvironmentIdQueuesQueueNameRouteImport } from './routes/$workspaceId/$environmentId/queues/$queueName'
 
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
@@ -36,9 +39,19 @@ const SignupRoute = SignupRouteImport.update({
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WorkspaceIdRoute = WorkspaceIdRouteImport.update({
@@ -108,6 +121,12 @@ const WorkspaceIdEnvironmentIdStatsRoute =
     path: '/stats',
     getParentRoute: () => WorkspaceIdEnvironmentIdRoute,
   } as any)
+const WorkspaceIdEnvironmentIdQueuesIndexRoute =
+  WorkspaceIdEnvironmentIdQueuesIndexRouteImport.update({
+    id: '/queues/',
+    path: '/queues/',
+    getParentRoute: () => WorkspaceIdEnvironmentIdRoute,
+  } as any)
 const WorkspaceIdEnvironmentIdQueuesQueueNameRoute =
   WorkspaceIdEnvironmentIdQueuesQueueNameRouteImport.update({
     id: '/queues/$queueName',
@@ -118,7 +137,9 @@ const WorkspaceIdEnvironmentIdQueuesQueueNameRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$workspaceId': typeof WorkspaceIdRouteWithChildren
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/verify-email': typeof VerifyEmailRoute
   '/$workspaceId/$environmentId': typeof WorkspaceIdEnvironmentIdRouteWithChildren
@@ -132,11 +153,14 @@ export interface FileRoutesByFullPath {
   '/$workspaceId/$environmentId/': typeof WorkspaceIdEnvironmentIdIndexRoute
   '/$workspaceId/settings/': typeof WorkspaceIdSettingsIndexRoute
   '/$workspaceId/$environmentId/queues/$queueName': typeof WorkspaceIdEnvironmentIdQueuesQueueNameRoute
+  '/$workspaceId/$environmentId/queues/': typeof WorkspaceIdEnvironmentIdQueuesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$workspaceId': typeof WorkspaceIdRouteWithChildren
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/verify-email': typeof VerifyEmailRoute
   '/$workspaceId/bookmarks': typeof WorkspaceIdBookmarksRoute
@@ -149,12 +173,15 @@ export interface FileRoutesByTo {
   '/$workspaceId/$environmentId': typeof WorkspaceIdEnvironmentIdIndexRoute
   '/$workspaceId/settings': typeof WorkspaceIdSettingsIndexRoute
   '/$workspaceId/$environmentId/queues/$queueName': typeof WorkspaceIdEnvironmentIdQueuesQueueNameRoute
+  '/$workspaceId/$environmentId/queues': typeof WorkspaceIdEnvironmentIdQueuesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$workspaceId': typeof WorkspaceIdRouteWithChildren
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/verify-email': typeof VerifyEmailRoute
   '/$workspaceId/$environmentId': typeof WorkspaceIdEnvironmentIdRouteWithChildren
@@ -168,13 +195,16 @@ export interface FileRoutesById {
   '/$workspaceId/$environmentId/': typeof WorkspaceIdEnvironmentIdIndexRoute
   '/$workspaceId/settings/': typeof WorkspaceIdSettingsIndexRoute
   '/$workspaceId/$environmentId/queues/$queueName': typeof WorkspaceIdEnvironmentIdQueuesQueueNameRoute
+  '/$workspaceId/$environmentId/queues/': typeof WorkspaceIdEnvironmentIdQueuesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/$workspaceId'
+    | '/forgot-password'
     | '/login'
+    | '/reset-password'
     | '/signup'
     | '/verify-email'
     | '/$workspaceId/$environmentId'
@@ -188,11 +218,14 @@ export interface FileRouteTypes {
     | '/$workspaceId/$environmentId/'
     | '/$workspaceId/settings/'
     | '/$workspaceId/$environmentId/queues/$queueName'
+    | '/$workspaceId/$environmentId/queues/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/$workspaceId'
+    | '/forgot-password'
     | '/login'
+    | '/reset-password'
     | '/signup'
     | '/verify-email'
     | '/$workspaceId/bookmarks'
@@ -205,11 +238,14 @@ export interface FileRouteTypes {
     | '/$workspaceId/$environmentId'
     | '/$workspaceId/settings'
     | '/$workspaceId/$environmentId/queues/$queueName'
+    | '/$workspaceId/$environmentId/queues'
   id:
     | '__root__'
     | '/'
     | '/$workspaceId'
+    | '/forgot-password'
     | '/login'
+    | '/reset-password'
     | '/signup'
     | '/verify-email'
     | '/$workspaceId/$environmentId'
@@ -223,12 +259,15 @@ export interface FileRouteTypes {
     | '/$workspaceId/$environmentId/'
     | '/$workspaceId/settings/'
     | '/$workspaceId/$environmentId/queues/$queueName'
+    | '/$workspaceId/$environmentId/queues/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   WorkspaceIdRoute: typeof WorkspaceIdRouteWithChildren
+  ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
   InviteTokenRoute: typeof InviteTokenRoute
@@ -250,11 +289,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/$workspaceId': {
@@ -341,6 +394,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WorkspaceIdEnvironmentIdStatsRouteImport
       parentRoute: typeof WorkspaceIdEnvironmentIdRoute
     }
+    '/$workspaceId/$environmentId/queues/': {
+      id: '/$workspaceId/$environmentId/queues/'
+      path: '/queues'
+      fullPath: '/$workspaceId/$environmentId/queues/'
+      preLoaderRoute: typeof WorkspaceIdEnvironmentIdQueuesIndexRouteImport
+      parentRoute: typeof WorkspaceIdEnvironmentIdRoute
+    }
     '/$workspaceId/$environmentId/queues/$queueName': {
       id: '/$workspaceId/$environmentId/queues/$queueName'
       path: '/queues/$queueName'
@@ -355,6 +415,7 @@ interface WorkspaceIdEnvironmentIdRouteChildren {
   WorkspaceIdEnvironmentIdStatsRoute: typeof WorkspaceIdEnvironmentIdStatsRoute
   WorkspaceIdEnvironmentIdIndexRoute: typeof WorkspaceIdEnvironmentIdIndexRoute
   WorkspaceIdEnvironmentIdQueuesQueueNameRoute: typeof WorkspaceIdEnvironmentIdQueuesQueueNameRoute
+  WorkspaceIdEnvironmentIdQueuesIndexRoute: typeof WorkspaceIdEnvironmentIdQueuesIndexRoute
 }
 
 const WorkspaceIdEnvironmentIdRouteChildren: WorkspaceIdEnvironmentIdRouteChildren =
@@ -363,6 +424,8 @@ const WorkspaceIdEnvironmentIdRouteChildren: WorkspaceIdEnvironmentIdRouteChildr
     WorkspaceIdEnvironmentIdIndexRoute: WorkspaceIdEnvironmentIdIndexRoute,
     WorkspaceIdEnvironmentIdQueuesQueueNameRoute:
       WorkspaceIdEnvironmentIdQueuesQueueNameRoute,
+    WorkspaceIdEnvironmentIdQueuesIndexRoute:
+      WorkspaceIdEnvironmentIdQueuesIndexRoute,
   }
 
 const WorkspaceIdEnvironmentIdRouteWithChildren =
@@ -397,7 +460,9 @@ const WorkspaceIdRouteWithChildren = WorkspaceIdRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   WorkspaceIdRoute: WorkspaceIdRouteWithChildren,
+  ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
   VerifyEmailRoute: VerifyEmailRoute,
   InviteTokenRoute: InviteTokenRoute,

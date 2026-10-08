@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useConfirm } from "@/components/confirm-provider";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import { useEffect, useMemo, useState } from "react";
@@ -86,6 +87,7 @@ function FolderFormSheet({
   onSaved: () => void;
 }) {
   const isEdit = !!folder;
+  const confirm = useConfirm();
 
   const form = useForm({
     defaultValues: {
@@ -102,6 +104,27 @@ function FolderFormSheet({
       if (!parsed.success) return;
 
       if (isEdit && folder) {
+        const changes: string[] = [];
+        if (parsed.data.name !== folder.name) {
+          changes.push(`rename it to "${parsed.data.name}"`);
+        }
+        if (parsed.data.isShared !== folder.isShared) {
+          changes.push(
+            parsed.data.isShared
+              ? "share it with everyone in the workspace"
+              : "make it private to you",
+          );
+        }
+        if (changes.length === 0) {
+          onOpenChange(false);
+          return;
+        }
+        const ok = await confirm({
+          title: "Update folder?",
+          description: <>This will {changes.join(" and ")}.</>,
+          confirmLabel: "Update folder",
+        });
+        if (!ok) return;
         await rpcClient.bookmark.updateFolder({
           id: folder.id,
           name: parsed.data.name,
@@ -204,6 +227,7 @@ function BookmarksPage() {
     Route.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
 
   const [search, setSearch] = useState("");
   const [folderSheetOpen, setFolderSheetOpen] = useState(false);
@@ -445,14 +469,20 @@ function BookmarksPage() {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete folder "${selectedFolder.name}" and all bookmarks inside?`,
-                        )
-                      ) {
-                        void deleteFolderMutation.mutate(selectedFolder.id);
-                      }
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: "Delete folder?",
+                        description: (
+                          <>
+                            <span className="font-medium">{selectedFolder.name}</span> and every
+                            bookmark and note inside it will be deleted for everyone who can see
+                            it. This cannot be undone.
+                          </>
+                        ),
+                        confirmLabel: "Delete folder",
+                        destructive: true,
+                      });
+                      if (ok) deleteFolderMutation.mutate(selectedFolder.id);
                     }}
                   >
                     Delete folder
@@ -512,7 +542,24 @@ function BookmarksPage() {
                       bookmark={bookmark}
                       canWrite={canWrite}
                       onOpen={() => openBookmarkSheet(bookmark.id)}
-                      onDelete={() => void deleteBookmarkMutation.mutate(bookmark.id)}
+                      onDelete={async () => {
+                        const ok = await confirm({
+                          title: "Delete bookmark?",
+                          description: (
+                            <>
+                              The bookmark for job{" "}
+                              <span className="font-mono">
+                                #{(bookmark.targetRef as JobBookmarkTargetRef).jobId}
+                              </span> and its saved
+                              snapshot and notes will be deleted. The job itself in Redis is not
+                              touched.
+                            </>
+                          ),
+                          confirmLabel: "Delete bookmark",
+                          destructive: true,
+                        });
+                        if (ok) deleteBookmarkMutation.mutate(bookmark.id);
+                      }}
                       isDeleting={
                         deleteBookmarkMutation.isPending &&
                         deleteBookmarkMutation.variables === bookmark.id
@@ -615,9 +662,7 @@ function BookmarkRow({
             aria-label="Remove bookmark"
             onClick={(e) => {
               e.stopPropagation();
-              if (window.confirm("Remove this bookmark?")) {
-                onDelete();
-              }
+              onDelete();
             }}
           >
             <Trash2Icon className="size-3" />

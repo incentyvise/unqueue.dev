@@ -1,6 +1,7 @@
 import type { Job } from "bullmq";
 import type { RedisConnection } from "./redis-types.js";
 import { withQueue } from "./queue-runner.js";
+import type { AddJobInput } from "./types.js";
 
 const BULK_CONCURRENCY = 8;
 
@@ -107,6 +108,22 @@ export async function replayJob(
     if (!job) throw new Error("Job not found");
     const newJob = await queue.add(job.name, job.data);
     return { newJobId: newJob.id ?? "" };
+  });
+}
+
+export async function addJob(
+  connection: RedisConnection,
+  queueName: string,
+  prefix: string,
+  input: AddJobInput,
+): Promise<{ jobId: string }> {
+  return withQueue(connection, queueName, prefix, async (queue) => {
+    const job = await queue.add(input.name, input.data, {
+      delay: input.delay || undefined,
+      priority: input.priority || undefined,
+      attempts: input.attempts || undefined,
+    });
+    return { jobId: job.id ?? "" };
   });
 }
 

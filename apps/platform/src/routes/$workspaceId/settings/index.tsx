@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useConfirm } from "@/components/confirm-provider";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { CheckIcon, CopyIcon } from "lucide-react";
@@ -65,6 +66,7 @@ function CopyValue({ value }: { value: string }) {
 function WorkspaceSettings() {
   const { workspaceId } = Route.useParams();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
 
   const { data: workspaces, isLoading } = useQuery({
     queryKey: ["workspaces"],
@@ -87,6 +89,17 @@ function WorkspaceSettings() {
   const save = async () => {
     const trimmed = nameValue.trim();
     if (!trimmed || !isDirty) return;
+    const ok = await confirm({
+      title: "Rename workspace?",
+      description: (
+        <>
+          <span className="font-medium">{workspace?.name}</span> will be renamed to{" "}
+          <span className="font-medium">{trimmed}</span> for every member.
+        </>
+      ),
+      confirmLabel: "Rename",
+    });
+    if (!ok) return;
     setIsSaving(true);
     setSaveError(null);
     try {

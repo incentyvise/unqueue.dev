@@ -15,14 +15,10 @@ const thClass =
   "px-3 py-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground";
 
 const STAT_LABELS = [
-  "Active jobs",
+  "Throughput",
+  "Failure rate",
   "Backlog",
-  "Failed jobs",
-  "Success rate",
-  "Queues",
-  "Redis",
-  "Total jobs",
-  "Paused queues",
+  "Active now",
 ] as const;
 
 function StatCardSkeleton({ label }: { label: string }) {

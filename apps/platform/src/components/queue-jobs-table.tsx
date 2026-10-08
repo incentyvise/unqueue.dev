@@ -1,4 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect } from "react";
 import { InboxIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatJobAttemptsLabel } from "@/lib/format-job-attempts";
@@ -18,6 +19,7 @@ export type QueueJobRow = {
   processedOn?: number;
   finishedOn?: number;
   attemptsMade: number;
+  failedReason?: string;
   delay?: number;
   opts?: {
     attempts?: number;
@@ -169,15 +171,19 @@ export function QueueJobsTable({
   jobs,
   selected,
   activeJobId,
+  focusedIndex = -1,
   emptyState,
   scrollRef,
   onToggleSelect,
   onToggleSelectAll,
   onOpenJob,
+  onFocusIndex,
 }: {
   jobs: QueueJobRow[];
   selected: Set<string>;
   activeJobId?: string;
+  focusedIndex?: number;
+  onFocusIndex?: (index: number) => void;
   emptyState?: {
     title: string;
     description: string;
@@ -199,6 +205,13 @@ export function QueueJobsTable({
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
   });
+
+  useEffect(() => {
+    if (focusedIndex >= 0 && focusedIndex < jobs.length) {
+      virtualizer.scrollToIndex(focusedIndex, { align: "auto" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedIndex]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const totalSize = virtualizer.getTotalSize();
@@ -231,6 +244,7 @@ export function QueueJobsTable({
           const job = jobs[virtualItem.index]!;
           const isSelected = selected.has(job.id);
           const isActive = activeJobId === job.id;
+          const isFocused = focusedIndex === virtualItem.index;
 
           return (
             <tr
@@ -241,8 +255,12 @@ export function QueueJobsTable({
                 "group cursor-pointer border-b border-border/60 transition-colors last:border-0 hover:bg-muted/40",
                 isActive && "bg-accent/60 hover:bg-accent/60",
                 isSelected && !isActive && "bg-primary/5",
+                isFocused && "shadow-[inset_2px_0_0_0_var(--primary)]",
               )}
               onClick={() => onOpenJob(job.id)}
+              onMouseMove={() => {
+                if (!isFocused) onFocusIndex?.(virtualItem.index);
+              }}
             >
               <td className={cn(tdClass, "w-9 pl-4")}>
                 <LucideCheckbox
@@ -250,7 +268,7 @@ export function QueueJobsTable({
                   onCheckedChange={() => onToggleSelect(job.id)}
                   className={cn(
                     "opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
-                    isSelected && "opacity-100",
+                    (isSelected || isFocused) && "opacity-100",
                   )}
                 />
               </td>
@@ -264,6 +282,14 @@ export function QueueJobsTable({
                     #{job.id}
                   </span>
                 </span>
+                {job.state === "failed" && job.failedReason && (
+                  <span
+                    className="block truncate font-mono text-[10px] text-destructive/80"
+                    title={job.failedReason}
+                  >
+                    {job.failedReason}
+                  </span>
+                )}
               </td>
               <td className={cn(tdClass, "min-w-[32rem]")}>
                 <JobTimeline job={job} />

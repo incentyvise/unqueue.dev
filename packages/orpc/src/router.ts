@@ -392,6 +392,32 @@ const jobRouter = {
       return context.services.job.get(toActor(context), input);
     }),
 
+  search: base
+    .input(
+      z.object({
+        redisInstanceId: z.string().length(24),
+        queueName: z.string(),
+        state: z.enum([
+          "all",
+          "waiting",
+          "active",
+          "delayed",
+          "completed",
+          "failed",
+          "paused",
+          "prioritized",
+          "waiting-children",
+          "schedulers",
+        ]),
+        query: z.string().trim().min(1).max(200),
+        limit: z.number().int().min(1).max(500).default(100),
+      }),
+    )
+    .use(authed)
+    .handler(async ({ context, input }) => {
+      return context.services.job.search(toActor(context), input);
+    }),
+
   listFailedGroups: base
     .input(
       z.object({
@@ -423,6 +449,26 @@ const queueActionInput = z.object({
 });
 
 const jobActionsRouter = {
+  add: base
+    .input(
+      z.object({
+        redisInstanceId: z.string().length(24),
+        queueName: z.string(),
+        name: z.string().trim().min(1).max(200),
+        data: z.unknown(),
+        delay: z.number().int().min(0).max(365 * 24 * 60 * 60_000).optional(),
+        priority: z.number().int().min(0).max(2_097_152).optional(),
+        attempts: z.number().int().min(1).max(100).optional(),
+      }),
+    )
+    .use(authed)
+    .handler(async ({ context, input }) => {
+      return context.services.jobActions.add(toActor(context), {
+        ...input,
+        data: input.data ?? {},
+      });
+    }),
+
   retry: base
     .input(jobActionInput)
     .use(authed)
@@ -760,6 +806,25 @@ const statsRouter = {
     .use(authed)
     .handler(async ({ context, input }) => {
       return context.services.stats.getQueueHistory(toActor(context), input);
+    }),
+
+  getEnvironmentHistory: base
+    .input(
+      z.object({
+        environmentId: z.string().length(24),
+        hours: z
+          .number()
+          .min(1)
+          .max(24 * 30)
+          .default(24),
+      }),
+    )
+    .use(authed)
+    .handler(async ({ context, input }) => {
+      return context.services.stats.getEnvironmentHistory(
+        toActor(context),
+        input,
+      );
     }),
 };
 
