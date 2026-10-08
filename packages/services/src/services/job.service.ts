@@ -3,6 +3,7 @@ import {
   listFailedJobGroups,
   listJobs,
   listJobIds,
+  searchJobs,
   type JobListState,
 } from "@unqueue/bullmq";
 import type { Logger } from "@unqueue/logger";
@@ -93,6 +94,40 @@ export function createJobService(deps: ServiceDeps, logger: Logger) {
         connection,
         input.queueName,
         prefix,
+        queuePool,
+      );
+    },
+
+    async search(
+      actor: Actor,
+      input: {
+        redisInstanceId: string;
+        queueName: string;
+        state: JobListState;
+        query: string;
+        limit?: number;
+      },
+    ) {
+      logger.debug(
+        {
+          redisInstanceId: input.redisInstanceId,
+          queueName: input.queueName,
+          state: input.state,
+        },
+        "Searching jobs",
+      );
+
+      const { connection, prefix, queuePool } = await getConnection(
+        actor,
+        input.redisInstanceId,
+      );
+      return searchJobs(
+        connection,
+        input.queueName,
+        prefix,
+        input.state,
+        input.query,
+        input.limit,
         queuePool,
       );
     },

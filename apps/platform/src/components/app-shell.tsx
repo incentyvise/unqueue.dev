@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { MoonIcon, SunIcon } from "lucide-react";
-import { useRouterState } from "@tanstack/react-router";
+import { KeyboardIcon, MoonIcon, SunIcon } from "lucide-react";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/app-sidebar";
 import { CommandPalette } from "@/components/command-palette";
+import { ShortcutsDialog } from "@/components/shortcuts-dialog";
+import { useHotkeys } from "@/hooks/use-hotkeys";
 import { ErrorBoundary, SilentErrorBoundary } from "@/components/error-boundary";
 import { NavSearch } from "@/components/nav-search";
 import { PageBreadcrumbs } from "@/components/page-breadcrumbs";
@@ -23,9 +25,36 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [commandOpen, setCommandOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const { workspaceId, environmentId, hasNavigationContext } =
     useShellContext();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const navigate = useNavigate();
+
+  const envNav = (
+    to:
+      | "/$workspaceId/$environmentId"
+      | "/$workspaceId/$environmentId/queues"
+      | "/$workspaceId/$environmentId/stats",
+  ) => {
+    if (!workspaceId || !environmentId) return;
+    void navigate({ to, params: { workspaceId, environmentId } });
+  };
+
+  useHotkeys(
+    {
+      "?": () => setShortcutsOpen(true),
+      "g o": () => envNav("/$workspaceId/$environmentId"),
+      "g q": () => envNav("/$workspaceId/$environmentId/queues"),
+      "g s": () => envNav("/$workspaceId/$environmentId/stats"),
+      "g b": () => {
+        if (workspaceId) {
+          void navigate({ to: "/$workspaceId/bookmarks", params: { workspaceId } });
+        }
+      },
+    },
+    { enabled: hasNavigationContext },
+  );
 
   return (
     <ShellLayoutProvider>
@@ -57,7 +86,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <main className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none">
                 <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>
               </main>
-              {hasNavigationContext && <AppStatusBar environmentId={environmentId} />}
+              {hasNavigationContext && (
+                <AppStatusBar
+                  environmentId={environmentId}
+                  onShowShortcuts={() => setShortcutsOpen(true)}
+                />
+              )}
             </SidebarInset>
             {hasNavigationContext && workspaceId && environmentId && (
               <CommandPalette
@@ -65,8 +99,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 environmentId={environmentId}
                 open={commandOpen}
                 onOpenChange={setCommandOpen}
+                onShowShortcuts={() => setShortcutsOpen(true)}
               />
             )}
+            <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
           </SidebarProvider>
         </TooltipProvider>
       </ShellProvider>
@@ -94,7 +130,13 @@ function ThemeToggleIcon() {
   );
 }
 
-function AppStatusBar({ environmentId }: { environmentId?: string }) {
+function AppStatusBar({
+  environmentId,
+  onShowShortcuts,
+}: {
+  environmentId?: string;
+  onShowShortcuts: () => void;
+}) {
   const { slotContent } = useStatusBar();
   const { data: redisInstances } = useQuery({
     queryKey: ["redis", "clientCounts", environmentId],
@@ -115,9 +157,18 @@ function AppStatusBar({ environmentId }: { environmentId?: string }) {
           {slotContent}
         </>
       )}
+      <span className="flex-1" />
+      <button
+        type="button"
+        onClick={onShowShortcuts}
+        className="hidden items-center gap-1 transition-colors hover:text-foreground md:flex"
+        title="Keyboard shortcuts"
+      >
+        <KeyboardIcon className="size-3.5" />
+        <span>?</span>
+      </button>
       {redisInstances && redisInstances.length > 0 && (
         <>
-          <span className="flex-1" />
           <StatusBarSeparator />
           <RedisIcon className="size-3 shrink-0" />
           {redisInstances.map((instance) => {

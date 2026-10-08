@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useConfirm } from "@/components/confirm-provider";
 import { useForm } from "@tanstack/react-form";
 import { Link } from "@tanstack/react-router";
 import {
@@ -331,6 +332,7 @@ function NoteItem({
   onUpdated: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const confirm = useConfirm();
   const isOwn = currentUserId === note.userId;
   const isPending = note.id.startsWith("optimistic-");
   const created = noteTimestamp(note.createdAt);
@@ -341,6 +343,16 @@ function NoteItem({
     onSubmit: async ({ value }) => {
       const parsed = noteBodySchema.safeParse(value.body);
       if (!parsed.success) return;
+      if (parsed.data === note.body) {
+        setEditing(false);
+        return;
+      }
+      const ok = await confirm({
+        title: "Save changes to note?",
+        description: "Everyone who can see this bookmark will see the edited note.",
+        confirmLabel: "Save note",
+      });
+      if (!ok) return;
       await rpcClient.bookmark.updateNote({
         id: note.id,
         body: parsed.data,
@@ -404,10 +416,14 @@ function NoteItem({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
-                  onClick={() => {
-                    if (window.confirm("Delete this note?")) {
-                      void deleteMutation.mutate();
-                    }
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: "Delete note?",
+                      description: "Your note will be removed for everyone. This cannot be undone.",
+                      confirmLabel: "Delete note",
+                      destructive: true,
+                    });
+                    if (ok) deleteMutation.mutate();
                   }}
                 >
                   <Trash2Icon />

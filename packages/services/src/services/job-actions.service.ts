@@ -1,4 +1,5 @@
 import {
+  addJob,
   bulkRemove,
   bulkReplay,
   bulkRetry,
@@ -85,6 +86,35 @@ export function createJobActionsService(deps: ServiceDeps, logger: Logger) {
       );
       await promoteJob(connection, input.queueName, prefix, input.jobId);
       return { ok: true as const };
+    },
+
+    async add(
+      actor: Actor,
+      input: {
+        redisInstanceId: string;
+        queueName: string;
+        name: string;
+        data: unknown;
+        delay?: number;
+        priority?: number;
+        attempts?: number;
+      },
+    ) {
+      logger.info(
+        {
+          redisInstanceId: input.redisInstanceId,
+          queueName: input.queueName,
+          name: input.name,
+        },
+        "Adding job",
+      );
+
+      const { connection, prefix } = await getConnection(
+        actor,
+        input.redisInstanceId,
+      );
+      const { redisInstanceId: _r, queueName, ...job } = input;
+      return addJob(connection, queueName, prefix, job);
     },
 
     async bulkRetry(

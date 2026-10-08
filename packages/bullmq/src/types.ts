@@ -58,8 +58,14 @@ export type QueueMeta = {
 };
 
 export type FailedJobGroup = {
+  /** Stable key: job name + normalised error message. */
+  key: string;
   name: string;
+  /** Normalised error message used for grouping (numbers/ids replaced). */
+  message: string;
   count: number;
+  jobIds: string[];
+  firstFailedAt?: number;
   latestJobId: string;
   latestFailedAt?: number;
   failedReason?: string;
@@ -100,4 +106,20 @@ export type RedisInstanceConfig = {
   tls: boolean;
   tlsServername?: string;
   bullmqPrefix: string;
+};
+
+export type JobSearchResult = {
+  jobs: JobSummary[];
+  /** Number of jobs inspected while searching. */
+  scanned: number;
+  /** True when the scan limit was hit before inspecting every job. */
+  truncated: boolean;
+};
+
+export type AddJobInput = {
+  name: string;
+  data: unknown;
+  delay?: number;
+  priority?: number;
+  attempts?: number;
 };

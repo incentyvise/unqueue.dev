@@ -4,6 +4,7 @@ import {
   BellIcon,
   BookmarkIcon,
   LayoutDashboardIcon,
+  LayersIcon,
   DatabaseZapIcon,
 } from "lucide-react";
 import {
@@ -39,6 +40,12 @@ export function NavMain({
     params: { workspaceId },
   });
 
+  const isQueuesActive = !!matchRoute({
+    to: "/$workspaceId/$environmentId/queues",
+    params: { workspaceId, environmentId },
+    fuzzy: true,
+  });
+
   const isStatsActive = !!matchRoute({
     to: "/$workspaceId/$environmentId/stats",
     params: { workspaceId, environmentId },
@@ -61,6 +68,17 @@ export function NavMain({
             >
               <LayoutDashboardIcon />
               <span>Overview</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton asChild isActive={isQueuesActive} tooltip="Queues">
+            <Link
+              to="/$workspaceId/$environmentId/queues"
+              params={{ workspaceId, environmentId }}
+            >
+              <LayersIcon />
+              <span>Queues</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

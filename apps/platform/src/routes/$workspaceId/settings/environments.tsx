@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useConfirm } from "@/components/confirm-provider";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import { useState } from "react";
@@ -163,6 +164,7 @@ function EditEnvironmentForm({
   onCancel: () => void;
 }) {
   const [formError, setFormError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const form = useForm({
     defaultValues: { name: environment.name },
@@ -184,6 +186,18 @@ function EditEnvironmentForm({
       }
 
       setFormError(null);
+
+      const ok = await confirm({
+        title: "Rename environment?",
+        description: (
+          <>
+            <span className="font-medium">{environment.name}</span> will be renamed to{" "}
+            <span className="font-medium">{parsed.data.name}</span> for everyone in the workspace.
+          </>
+        ),
+        confirmLabel: "Rename",
+      });
+      if (!ok) return;
 
       try {
         await rpcClient.environment.rename({

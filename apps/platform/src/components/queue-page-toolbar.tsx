@@ -15,7 +15,10 @@ import {
   PlayCircleIcon,
   RefreshCwIcon,
   HistoryIcon,
+  LinkIcon,
   ListMinusIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
   TimerIcon,
   Trash2Icon,
   XCircleIcon,
@@ -26,6 +29,15 @@ import { Button } from "@/components/ui/button";
 import { RedisIcon } from "@/components/icons/redis";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { getQueueHealth, QUEUE_HEALTH_META } from "@/lib/queue-health";
 
 export type QueueJobFilterState =
   | "latest"
@@ -162,91 +174,138 @@ export function QueuePageHeader({
   queueName,
   isPaused,
   counts,
+  workers,
   redisNickname,
   isFetching,
   canWrite,
   onAction,
+  onAddJob,
+  onCopyLink,
 }: {
   queueName: string;
   isPaused: boolean;
   counts?: QueueCounts;
+  workers?: number;
   redisNickname?: string;
   isFetching: boolean;
   canWrite: boolean;
   onAction: (action: QueueAction) => void;
+  onAddJob: () => void;
+  onCopyLink: () => void;
 }) {
-  const health = counts
-    ? isPaused
-      ? "paused"
-      : counts.failed > 0
-        ? "failed"
-        : counts.waiting + counts.delayed >= 10
-          ? "backlog"
-          : counts.active > 0
-            ? "active"
-            : "idle"
-    : null;
-
-  const HEALTH_DOT: Record<string, string> = {
-    failed: "bg-destructive",
-    paused: "bg-amber-500",
-    backlog: "bg-sky-500",
-    active: "bg-blue-500",
-    idle: "bg-emerald-500/50",
-  };
-
-  const HEALTH_LABEL: Record<string, string> = {
-    failed: "Failed jobs",
-    paused: "Paused",
-    backlog: "Backlog",
-    active: "Active",
-    idle: "Idle",
-  };
+  const health = counts ? getQueueHealth({ isPaused, counts }) : null;
+  const meta = health ? QUEUE_HEALTH_META[health] : null;
+  const noWorkers = workers === 0 && !!counts && counts.waiting + counts.delayed > 0;
 
   return (
-    <div className="flex shrink-0 items-center justify-between gap-4 border-b px-4 py-3">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-3">
       <div className="flex min-w-0 items-center gap-2.5">
-        {health && (
-          <span
-            className={cn("size-2 shrink-0 rounded-full", HEALTH_DOT[health])}
-            title={HEALTH_LABEL[health]}
-          />
+        {meta && (
+          <span className="relative flex size-2.5 shrink-0" title={meta.description}>
+            {health === "active" && (
+              <span className={cn("absolute inline-flex size-full animate-ping rounded-full opacity-60", meta.dot)} />
+            )}
+            <span className={cn("relative inline-flex size-2.5 rounded-full", meta.dot)} />
+          </span>
         )}
-        <h1 className="truncate text-base font-medium">{queueName}</h1>
+        <h1 className="truncate font-mono text-base font-medium">{queueName}</h1>
+        {meta && (
+          <span
+            className={cn(
+              "shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium",
+              meta.text,
+            )}
+          >
+            {meta.label}
+          </span>
+        )}
         {redisNickname && (
-          <span className="flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+          <span className="hidden shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground sm:flex">
             <RedisIcon className="size-3 shrink-0" />
             {redisNickname}
           </span>
         )}
+        {noWorkers && (
+          <span
+            className="hidden shrink-0 items-center gap-1 rounded-md bg-destructive/10 px-1.5 py-0.5 text-[11px] font-medium text-destructive md:flex"
+            title="Jobs are waiting but no worker is connected to this queue"
+          >
+            <AlertTriangleIcon className="size-3" />
+            No workers online
+          </span>
+        )}
       </div>
-      <div className="flex items-center gap-1.5">
-        <Button size="sm" variant="ghost" onClick={() => onAction("refresh")} disabled={isFetching}>
+      <div className="flex items-center gap-1">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-8"
+          onClick={() => onAction("refresh")}
+          disabled={isFetching}
+          aria-label="Refresh"
+          title="Refresh"
+        >
           <RefreshCwIcon className={isFetching ? "animate-spin" : undefined} />
-          Refresh
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-8"
+          onClick={onCopyLink}
+          aria-label="Copy link to queue"
+          title="Copy link"
+        >
+          <LinkIcon />
         </Button>
         {canWrite && (
           <>
-            <Button size="sm" variant="ghost" onClick={() => onAction("pause")} disabled={isPaused}>
-              <PauseCircleIcon />
-              Pause
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onAction(isPaused ? "resume" : "pause")}
+              className={cn(isPaused && "border-amber-500/40 text-amber-700 dark:text-amber-300")}
+            >
+              {isPaused ? <PlayCircleIcon /> : <PauseCircleIcon />}
+              {isPaused ? "Resume" : "Pause"}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onAction("resume")} disabled={!isPaused}>
-              <PlayCircleIcon />
-              Resume
+            <Button size="sm" onClick={onAddJob} title="Add a job (n)">
+              <PlusIcon />
+              Add job
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => onAction("drain")}>
-              <ListMinusIcon />
-              Drain
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onAction("clean")}>
-              <Trash2Icon />
-              Clean
-            </Button>
-            <Button size="sm" variant="destructive" onClick={() => onAction("obliterate")}>
-              <XCircleIcon />
-              Obliterate
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="ghost" className="size-8" aria-label="More queue actions">
+                  <MoreHorizontalIcon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  Cleanup
+                </DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => onAction("clean")}>
+                  <Trash2Icon />
+                  <div className="flex flex-col">
+                    <span>Clean finished jobs</span>
+                    <span className="text-[11px] text-muted-foreground">Remove completed + failed</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onAction("drain")}>
+                  <ListMinusIcon />
+                  <div className="flex flex-col">
+                    <span>Drain waiting jobs</span>
+                    <span className="text-[11px] text-muted-foreground">Active jobs keep running</span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => onAction("obliterate")}
+                >
+                  <XCircleIcon />
+                  Obliterate queue…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         )}
       </div>
@@ -305,6 +364,15 @@ export function QueueMetricsPanel({
       <div className="grid w-full grid-cols-2 gap-0 sm:grid-cols-5">
         <MetricCard
           label="Success Rate"
+          tone={
+            totalInWindow === 0
+              ? undefined
+              : successRate >= 0.99
+                ? "success"
+                : successRate >= 0.95
+                  ? "warning"
+                  : "destructive"
+          }
           value={isLoading ? undefined : formatRate(successRate)}
           sub={
             isLoading
@@ -333,6 +401,7 @@ export function QueueMetricsPanel({
         />
         <MetricCard
           label="Workers"
+          tone={workers === 0 && waitingJobs > 0 ? "destructive" : undefined}
           value={isLoading ? undefined : workers.toLocaleString()}
           sub={isLoading ? undefined : "online"}
           isLoading={isLoading}
@@ -347,11 +416,13 @@ function MetricCard({
   value,
   sub,
   isLoading,
+  tone,
 }: {
   label: string;
   value?: string;
   sub?: string;
   isLoading: boolean;
+  tone?: "success" | "warning" | "destructive";
 }) {
   return (
     <div
@@ -364,7 +435,14 @@ function MetricCard({
       {isLoading ? (
         <Skeleton className="h-5 w-20" />
       ) : (
-        <p className="font-mono text-base font-semibold tracking-tight tabular-nums">
+        <p
+          className={cn(
+            "font-mono text-base font-semibold tracking-tight tabular-nums",
+            tone === "success" && "text-emerald-600 dark:text-emerald-400",
+            tone === "warning" && "text-amber-600 dark:text-amber-400",
+            tone === "destructive" && "text-destructive",
+          )}
+        >
           {value}
         </p>
       )}

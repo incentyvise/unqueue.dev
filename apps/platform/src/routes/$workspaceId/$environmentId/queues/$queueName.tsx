@@ -4,13 +4,23 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   CopyIcon,
   RefreshCwIcon,
   RotateCcwIcon,
+  SearchIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react";
+import { toast } from "sonner";
+import type { FailedJobGroup } from "@unqueue/bullmq";
+import { useConfirm } from "@/components/confirm-provider";
+import { Input } from "@/components/ui/input";
+import { Kbd } from "@/components/kbd";
+import { AddJobDialog, type AddJobPrefill } from "@/components/add-job-dialog";
+import { useHotkeys } from "@/hooks/use-hotkeys";
+import { bulkResultMessage, withToast } from "@/lib/notify";
 import { QueueHistoryPanel } from "@/components/queue-history-panel";
 import { z } from "zod";
 import { rpcClient } from "@/lib/api";
@@ -78,6 +88,7 @@ const searchSchema = z.object({
     .transform((value) => (value === "all" ? "latest" : value))
     .default("latest"),
   jobId: z.string().optional(),
+  q: z.string().optional(),
 });
 
 function hasJobDetailFields(job: unknown): boolean {
@@ -100,7 +111,12 @@ export const Route = createFileRoute(
 
 function QueuePage() {
   const { workspaceId, environmentId, queueName } = Route.useParams();
-  const { redisInstanceId, state, jobId: jobIdFromSearch } = Route.useSearch();
+  const {
+    redisInstanceId,
+    state,
+    jobId: jobIdFromSearch,
+    q: searchFromUrl,
+  } = Route.useSearch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -117,6 +133,47 @@ function QueuePage() {
     jobIdFromSearch,
   );
   const [sheetSchedulerId, setSheetSchedulerId] = useState<string | undefined>();
+  const [searchInput, setSearchInput] = useState(searchFromUrl ?? "");
+  const deferredSearch = useDeferredValue(searchInput.trim());
+  const [debouncedSearch, setDebouncedSearch] = useState(deferredSearch);
+  const [focusIndex, setFocusIndex] = useState(-1);
+  const [addJobOpen, setAddJobOpen] = useState(false);
+  const [addJobPrefill, setAddJobPrefill] = useState<AddJobPrefill | undefined>();
+  const [bulkBusy, setBulkBusy] = useState<"retry" | "replay" | "remove" | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const confirm = useConfirm();
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(deferredSearch), 400);
+    return () => clearTimeout(timer);
+  }, [deferredSearch]);
+
+  // Keep the input in sync when the URL changes underneath us (queue switch,
+  // back/forward). Our own debounced writes round-trip to the same value.
+  useEffect(() => {
+    const fromUrl = searchFromUrl ?? "";
+    if (fromUrl !== debouncedSearch) {
+      setSearchInput(fromUrl);
+      setDebouncedSearch(fromUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchFromUrl, queueName, redisInstanceId]);
+
+  useEffect(() => {
+    if ((searchFromUrl ?? "") === debouncedSearch) return;
+    void navigate({
+      to: "/$workspaceId/$environmentId/queues/$queueName",
+      params: { workspaceId, environmentId, queueName },
+      search: {
+        redisInstanceId,
+        state,
+        jobId: jobIdFromSearch,
+        q: debouncedSearch || undefined,
+      },
+      replace: true,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
 
   useEffect(() => {
     setSheetJobId(jobIdFromSearch);
@@ -125,7 +182,8 @@ function QueuePage() {
   useEffect(() => {
     setSelected(new Set());
     setSelectingAll(false);
-  }, [state]);
+    setFocusIndex(-1);
+  }, [state, debouncedSearch]);
 
   const { workspaceRole } = useShellContext();
   const canWrite = workspaceRole !== undefined && workspaceRole !== "viewer";
@@ -196,11 +254,46 @@ function QueuePage() {
     enabled: state === "schedulers",
   });
 
-  const jobs = jobsQuery.data?.pages.flat() ?? [];
+  const isSearching =
+    debouncedSearch.length > 0 && state !== "schedulers" && state !== "errors";
+
+  const searchQuery = useQuery({
+    queryKey: ["job-search", redisInstanceId, queueName, state, debouncedSearch],
+    queryFn: () =>
+      rpcClient.job.search({
+        redisInstanceId,
+        queueName,
+        state: state === "latest" ? "all" : (state as "waiting" | "active" | "completed" | "failed" | "prioritized" | "waiting-children" | "delayed" | "paused"),
+        query: debouncedSearch,
+        limit: 200,
+      }),
+    enabled: isSearching,
+    placeholderData: (prev) => prev,
+  });
+
+  const listedJobs = useMemo(
+    () => jobsQuery.data?.pages.flat() ?? [],
+    [jobsQuery.data],
+  );
+  const jobs = isSearching ? (searchQuery.data?.jobs ?? []) : listedJobs;
+  const knownJobNames = useMemo(
+    () => [...new Set(listedJobs.map((job) => job.name))].sort(),
+    [listedJobs],
+  );
   const fetchedCount = jobs.length;
   const sheetListJob = sheetJobId
     ? jobs.find((job) => job.id === sheetJobId)
     : undefined;
+
+  const openEditReplay = (prefill: AddJobPrefill) => {
+    setAddJobPrefill(prefill);
+    setAddJobOpen(true);
+  };
+
+  const openAddJob = () => {
+    setAddJobPrefill(undefined);
+    setAddJobOpen(true);
+  };
 
   useEffect(() => {
     const room = `queue:${redisInstanceId}:${queueName}`;
@@ -335,88 +428,219 @@ function QueuePage() {
     }
   };
 
-  const bulkRetry = async () => {
-    await rpcClient.jobActions.bulkRetry({
-      redisInstanceId,
-      queueName,
-      jobIds: [...selected],
-    });
+  const afterBulk = () => {
     setSelected(new Set());
-    jobsQuery.refetch();
+    void jobsQuery.refetch();
+    if (isSearching) void searchQuery.refetch();
+    void queryClient.invalidateQueries({
+      queryKey: ["failed-groups", redisInstanceId, queueName],
+    });
   };
 
-  const bulkReplay = async () => {
-    await rpcClient.jobActions.bulkReplay({
-      redisInstanceId,
-      queueName,
-      jobIds: [...selected],
+  const runBulk = async (
+    kind: "retry" | "replay" | "remove",
+    jobIds: string[],
+    group?: FailedJobGroup,
+  ) => {
+    if (jobIds.length === 0) return undefined;
+    const n = jobIds.length.toLocaleString();
+    const noun = jobIds.length === 1 ? "job" : "jobs";
+    const scope = group ? (
+      <>
+        {" "}These are the failed <span className="font-mono">{group.name}</span> jobs
+        with the error <span className="font-mono">{group.message}</span>.
+      </>
+    ) : null;
+    const copy = {
+      retry: {
+        title: `Retry ${n} ${noun}?`,
+        description: (
+          <>
+            {jobIds.length === 1 ? "It moves" : "They move"} back to waiting on{" "}
+            <span className="font-mono">{queueName}</span> and workers run{" "}
+            {jobIds.length === 1 ? "it" : "them"} again, including any side effects in
+            your job handler.{scope}
+          </>
+        ),
+        confirmLabel: `Retry ${n} ${noun}`,
+        destructive: false,
+      },
+      replay: {
+        title: `Replay ${n} ${noun}?`,
+        description: (
+          <>
+            Enqueues {n} new {noun} on <span className="font-mono">{queueName}</span>{" "}
+            with the same name and payload. The originals are left as they are.{scope}
+          </>
+        ),
+        confirmLabel: `Replay ${n} ${noun}`,
+        destructive: false,
+      },
+      remove: {
+        title: `Remove ${n} ${noun}?`,
+        description: (
+          <>
+            Permanently deletes {jobIds.length === 1 ? "this job" : "these jobs"} from{" "}
+            <span className="font-mono">{queueName}</span>. Active jobs locked by a worker
+            are skipped. This cannot be undone.{scope}
+          </>
+        ),
+        confirmLabel: `Remove ${n} ${noun}`,
+        destructive: true,
+      },
+    }[kind];
+    if (!(await confirm(copy))) return undefined;
+
+    const actions = {
+      retry: () => rpcClient.jobActions.bulkRetry({ redisInstanceId, queueName, jobIds }),
+      replay: () => rpcClient.jobActions.bulkReplay({ redisInstanceId, queueName, jobIds }),
+      remove: () => rpcClient.jobActions.bulkRemove({ redisInstanceId, queueName, jobIds }),
+    };
+    const verbs = { retry: "Retried", replay: "Replayed", remove: "Removed" };
+    const present = { retry: "Retrying", replay: "Replaying", remove: "Removing" };
+    setBulkBusy(kind);
+    const result = await withToast(actions[kind], {
+      loading: `${present[kind]} ${jobIds.length.toLocaleString()} jobs…`,
+      success: (r) => bulkResultMessage(verbs[kind], r),
+      error: `Could not ${kind} jobs`,
     });
-    setSelected(new Set());
-    jobsQuery.refetch();
+    setBulkBusy(null);
+    if (result) afterBulk();
+    return result;
   };
 
-  const bulkRemove = async () => {
-    await rpcClient.jobActions.bulkRemove({
-      redisInstanceId,
-      queueName,
-      jobIds: [...selected],
-    });
-    setSelected(new Set());
-    jobsQuery.refetch();
+  const bulkRetry = () => runBulk("retry", [...selected]);
+  const bulkReplay = () => runBulk("replay", [...selected]);
+  const bulkRemove = () => runBulk("remove", [...selected]);
+
+  const retryGroup = async (group: FailedJobGroup) => {
+    await runBulk("retry", group.jobIds, group);
+  };
+
+  const removeGroup = (group: FailedJobGroup) => {
+    void runBulk("remove", group.jobIds, group);
   };
 
   const refresh = () => {
     void queueMetaQuery.refetch();
     void metricsQuery.refetch();
-    void jobsQuery.refetch();
-    void schedulersQuery.refetch();
+    if (state === "errors") void errorsQuery.refetch();
+    else if (state === "schedulers") void schedulersQuery.refetch();
+    else if (isSearching) void searchQuery.refetch();
+    else void jobsQuery.refetch();
   };
 
   const runScheduler = async (schedulerId: string) => {
-    await rpcClient.scheduler.run({ redisInstanceId, queueName, schedulerId });
+    const ok = await confirm({
+      title: "Run scheduler now?",
+      description: (
+        <>
+          Enqueues a job from <span className="font-mono">{schedulerId}</span> right away,
+          in addition to its regular schedule.
+        </>
+      ),
+      confirmLabel: "Run now",
+    });
+    if (!ok) return;
+    await withToast(
+      () => rpcClient.scheduler.run({ redisInstanceId, queueName, schedulerId }),
+      { success: "Scheduler triggered", error: "Could not run scheduler" },
+    );
     void schedulersQuery.refetch();
   };
 
   const removeScheduler = async (schedulerId: string) => {
-    await rpcClient.scheduler.remove({ redisInstanceId, queueName, schedulerId });
+    const ok = await confirm({
+      title: "Remove scheduler?",
+      description: (
+        <>
+          <span className="font-mono">{schedulerId}</span> stops producing jobs. BullMQ
+          can&apos;t pause schedulers, so recreating it means re-adding it from your code.
+        </>
+      ),
+      confirmLabel: "Remove scheduler",
+      destructive: true,
+    });
+    if (!ok) return;
+    const removed = await withToast(
+      async () => {
+        await rpcClient.scheduler.remove({ redisInstanceId, queueName, schedulerId });
+        return true as const;
+      },
+      { success: "Scheduler removed", error: "Could not remove scheduler" },
+    );
     void schedulersQuery.refetch();
-    setSheetSchedulerId(undefined);
+    if (removed) setSheetSchedulerId(undefined);
   };
 
   const executeAction = async (action: QueueAction) => {
+    const q = { redisInstanceId, queueName };
     switch (action) {
       case "pause":
-        await rpcClient.queueAdmin.pause({ redisInstanceId, queueName });
+        await withToast(() => rpcClient.queueAdmin.pause(q), {
+          success: `Paused ${queueName}`,
+          error: "Could not pause queue",
+        });
         break;
       case "resume":
-        await rpcClient.queueAdmin.resume({ redisInstanceId, queueName });
+        await withToast(() => rpcClient.queueAdmin.resume(q), {
+          success: `Resumed ${queueName}`,
+          error: "Could not resume queue",
+        });
         break;
       case "drain":
-        await rpcClient.queueAdmin.drain({ redisInstanceId, queueName, delayed: false });
-        refresh();
+        await withToast(() => rpcClient.queueAdmin.drain({ ...q, delayed: false }), {
+          loading: "Draining waiting jobs…",
+          success: "Waiting jobs drained",
+          error: "Could not drain queue",
+        });
         break;
       case "clean":
-        await Promise.all([
-          rpcClient.queueAdmin.clean({ redisInstanceId, queueName, type: "completed", grace: 0, limit: 10000 }),
-          rpcClient.queueAdmin.clean({ redisInstanceId, queueName, type: "failed", grace: 0, limit: 10000 }),
-        ]);
-        refresh();
+        await withToast(
+          async () => {
+            const [completed, failed] = await Promise.all([
+              rpcClient.queueAdmin.clean({ ...q, type: "completed", grace: 0, limit: 10000 }),
+              rpcClient.queueAdmin.clean({ ...q, type: "failed", grace: 0, limit: 10000 }),
+            ]);
+            return (Array.isArray(completed) ? completed.length : 0) +
+              (Array.isArray(failed) ? failed.length : 0);
+          },
+          {
+            loading: "Cleaning finished jobs…",
+            success: (n) => `Removed ${n.toLocaleString()} finished ${n === 1 ? "job" : "jobs"}`,
+            error: "Could not clean queue",
+          },
+        );
         break;
       case "obliterate":
-        await rpcClient.queueAdmin.obliterate({ redisInstanceId, queueName });
-        refresh();
+        await withToast(() => rpcClient.queueAdmin.obliterate(q), {
+          loading: "Obliterating queue…",
+          success: `Obliterated ${queueName}`,
+          error: "Could not obliterate queue",
+        });
         break;
     }
+    refresh();
+  };
+
+  const copyQueueLink = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("jobId");
+    void navigator.clipboard
+      .writeText(url.toString())
+      .then(() => toast.success("Queue link copied"));
   };
 
   const isLoadingJobs =
     queueMetaQuery.isPending ||
-    (state !== "schedulers" && jobsQuery.isPending);
+    (state !== "schedulers" &&
+      (isSearching ? searchQuery.isPending : jobsQuery.isPending));
   const isEmpty = !isLoadingJobs && fetchedCount === 0;
   const isFetching =
     queueMetaQuery.isFetching ||
     metricsQuery.isFetching ||
-    jobsQuery.isFetching;
+    jobsQuery.isFetching ||
+    searchQuery.isFetching;
 
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = jobsQuery;
 
@@ -430,6 +654,15 @@ function QueuePage() {
       setSlotContent(null);
       return;
     }
+    if (isSearching) {
+      setSlotContent(
+        <span className="tabular-nums">
+          {fetchedCount.toLocaleString()} matches
+          {searchQuery.data && ` · scanned ${searchQuery.data.scanned.toLocaleString()}`}
+        </span>,
+      );
+      return;
+    }
     setSlotContent(
       <span className="tabular-nums">
         {fetchedCount.toLocaleString()} of {stateCount.toLocaleString()} loaded
@@ -441,14 +674,14 @@ function QueuePage() {
         )}
       </span>,
     );
-  }, [isLoadingJobs, state, fetchedCount, stateCount, isFetchingNextPage, setSlotContent]);
+  }, [isLoadingJobs, state, fetchedCount, stateCount, isFetchingNextPage, setSlotContent, isSearching, searchQuery.data]);
 
   useEffect(() => {
     return () => setSlotContent(null);
   }, [setSlotContent]);
 
   useEffect(() => {
-    if (state === "schedulers" || isLoadingJobs || isFetchingNextPage) return;
+    if (state === "schedulers" || isSearching || isLoadingJobs || isFetchingNextPage) return;
     if (!hasNextPage || fetchedCount >= minJobsToLoad) return;
     void fetchNextPage();
   }, [
@@ -466,6 +699,7 @@ function QueuePage() {
     if (!el || isLoadingJobs) return;
 
     const maybeLoadMore = () => {
+      if (isSearching) return;
       if (!hasNextPageRef.current || isFetchingNextPageRef.current) return;
       const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
       const threshold = Math.max(
@@ -491,14 +725,14 @@ function QueuePage() {
       el.removeEventListener("scroll", maybeLoadMore);
       resizeObserver.disconnect();
     };
-  }, [fetchNextPage, fetchedCount, state, isLoadingJobs]);
+  }, [fetchNextPage, fetchedCount, state, isLoadingJobs, isSearching]);
 
   const closeJobSheet = () => {
     setSheetJobId(undefined);
     void navigate({
       to: "/$workspaceId/$environmentId/queues/$queueName",
       params: { workspaceId, environmentId, queueName },
-      search: { redisInstanceId, state },
+      search: { redisInstanceId, state, q: debouncedSearch || undefined },
       replace: true,
     });
   };
@@ -517,10 +751,14 @@ function QueuePage() {
         redisInstanceId,
         state,
         jobId: id,
+        q: debouncedSearch || undefined,
       },
       replace: true,
     });
   };
+
+  const openJobSheetRef = useRef(openJobSheet);
+  openJobSheetRef.current = openJobSheet;
 
   const selectState = (nextState: QueueJobFilterState) => {
     void navigate({
@@ -529,9 +767,43 @@ function QueuePage() {
       search: {
         redisInstanceId,
         state: nextState,
+        q: debouncedSearch || undefined,
       },
     });
   };
+
+  const TAB_HOTKEYS: QueueJobFilterState[] = ["latest", "failed", "errors", "active", "waiting"];
+  const listMode = state !== "schedulers" && state !== "errors";
+
+  useHotkeys({
+    "/": () => {
+      if (listMode) searchInputRef.current?.focus();
+    },
+    n: () => {
+      if (canWrite) openAddJob();
+    },
+    j: () => listMode && setFocusIndex((i) => Math.min(jobs.length - 1, i + 1)),
+    k: () => listMode && setFocusIndex((i) => Math.max(0, i - 1)),
+    Enter: () => {
+      const job = jobs[focusIndex];
+      if (listMode && job) openJobSheet(job.id);
+    },
+    x: () => {
+      const job = jobs[focusIndex];
+      if (listMode && job) toggleSelect(job.id);
+    },
+    Escape: () => {
+      if (selected.size > 0) setSelected(new Set());
+      else if (searchInput) setSearchInput("");
+    },
+    ...Object.fromEntries(
+      TAB_HOTKEYS.map((tab, i) => [String(i + 1), () => selectState(tab)]),
+    ),
+  });
+
+  const hasSelection = selected.size > 0;
+  const allMatchSelected =
+    hasSelection && (isSearching ? selected.size >= jobs.length : selected.size >= stateCount && stateCount > 0);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -539,9 +811,12 @@ function QueuePage() {
         queueName={queueName}
         isPaused={queueMetaQuery.data?.isPaused ?? cachedQueue?.isPaused ?? false}
         counts={queueMetaQuery.data?.counts ?? cachedQueue?.counts}
+        workers={queueMetaQuery.data?.workers ?? cachedQueue?.workers}
         redisNickname={redisNickname}
         isFetching={isFetching}
         canWrite={canWrite}
+        onAddJob={openAddJob}
+        onCopyLink={copyQueueLink}
         onAction={(action) => {
           if (action === "refresh") {
             refresh();
@@ -592,18 +867,55 @@ function QueuePage() {
         onStateChange={selectState}
       />
 
-      {(() => {
-        const hasSelection = selected.size > 0;
-        const allMatchSelected = selected.size >= stateCount && stateCount > 0;
-        return (
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-b px-4 py-2">
-            <div className="flex items-center gap-3 text-xs">
+      {listMode && (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-b px-4 py-2">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="relative w-full max-w-xs">
+              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                ref={searchInputRef}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setSearchInput("");
+                    e.currentTarget.blur();
+                  }
+                  if (e.key === "Enter") {
+                    const first = jobs[0];
+                    if (first && first.id === searchInput.trim()) openJobSheet(first.id);
+                    e.currentTarget.blur();
+                    setFocusIndex(0);
+                  }
+                }}
+                placeholder="Search by job ID, name, error or payload"
+                className="h-8 pr-8 pl-8 text-xs"
+                aria-label="Search jobs"
+              />
+              {searchInput ? (
+                <button
+                  type="button"
+                  className="absolute top-1/2 right-2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  onClick={() => setSearchInput("")}
+                  aria-label="Clear search"
+                >
+                  {searchQuery.isFetching ? (
+                    <RefreshCwIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <XIcon className="size-3.5" />
+                  )}
+                </button>
+              ) : (
+                <Kbd className="absolute top-1/2 right-2 -translate-y-1/2">/</Kbd>
+              )}
+            </div>
+            <div className="hidden min-w-0 items-center gap-3 text-xs sm:flex">
               {hasSelection ? (
                 <>
-                  <span className="text-muted-foreground">
+                  <span className="text-foreground tabular-nums">
                     {selected.size.toLocaleString()} selected
                   </span>
-                  {!allMatchSelected ? (
+                  {!allMatchSelected && !isSearching ? (
                     <button
                       type="button"
                       disabled={selectingAll}
@@ -613,42 +925,70 @@ function QueuePage() {
                       {selectingAll && <RefreshCwIcon className="size-3 animate-spin" />}
                       Select all {stateCount.toLocaleString()}
                     </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="text-muted-foreground underline-offset-2 hover:underline"
-                      onClick={() => setSelected(new Set())}
-                    >
-                      Clear
-                    </button>
-                  )}
+                  ) : null}
+                  <button
+                    type="button"
+                    className="text-muted-foreground underline-offset-2 hover:underline"
+                    onClick={() => setSelected(new Set())}
+                  >
+                    Clear
+                  </button>
                 </>
+              ) : isSearching ? (
+                <span className="truncate text-muted-foreground">
+                  {searchQuery.isPending
+                    ? "Searching…"
+                    : `${jobs.length.toLocaleString()} ${jobs.length === 1 ? "match" : "matches"}`}
+                  {searchQuery.data?.truncated && (
+                    <span title="Search inspects the newest 2,000 jobs per state (500 per state on the Latest tab)">
+                      {" "}· partial scan
+                    </span>
+                  )}
+                </span>
               ) : (
-                <span className="text-muted-foreground/50">No jobs selected</span>
+                <span className="hidden text-muted-foreground/70 lg:inline">
+                  <Kbd>j</Kbd> <Kbd>k</Kbd> to move · <Kbd>x</Kbd> to select · <Kbd>?</Kbd> for more
+                </span>
               )}
             </div>
+          </div>
+          {canWrite && (
             <div className="flex items-center gap-1.5">
-              <Button size="sm" variant="outline" disabled={!hasSelection} onClick={() => void bulkRetry()}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!hasSelection || !!bulkBusy}
+                loading={bulkBusy === "retry"}
+                onClick={() => void bulkRetry()}
+              >
                 <RotateCcwIcon />
-                Retry {hasSelection ? `(${selected.size})` : ""}
+                Retry{hasSelection ? ` (${selected.size.toLocaleString()})` : ""}
               </Button>
-              <Button size="sm" variant="outline" disabled={!hasSelection} onClick={() => void bulkReplay()}>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!hasSelection || !!bulkBusy}
+                loading={bulkBusy === "replay"}
+                onClick={() => void bulkReplay()}
+                title="Enqueue copies of the selected jobs"
+              >
                 <CopyIcon />
-                Replay {hasSelection ? `(${selected.size})` : ""}
+                Replay{hasSelection ? ` (${selected.size.toLocaleString()})` : ""}
               </Button>
               <Button
                 size="sm"
                 variant="destructive"
-                disabled={!hasSelection}
+                disabled={!hasSelection || !!bulkBusy}
+                loading={bulkBusy === "remove"}
                 onClick={() => void bulkRemove()}
               >
                 <Trash2Icon />
-                Remove {hasSelection ? `(${selected.size})` : ""}
+                Remove{hasSelection ? ` (${selected.size.toLocaleString()})` : ""}
               </Button>
             </div>
-          </div>
-        );
-      })()}
+          )}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t bg-card">
         <div
@@ -670,7 +1010,10 @@ function QueuePage() {
               groups={errorsQuery.data ?? []}
               totalFailed={queueMetaQuery.data?.counts.failed ?? 0}
               isLoading={errorsQuery.isLoading}
+              canWrite={canWrite}
               onOpenJob={openJobSheet}
+              onRetryGroup={retryGroup}
+              onRemoveGroup={removeGroup}
             />
           ) : isLoadingJobs ? (
             <QueueJobsTableSkeleton rows={QUEUE_TABLE_SKELETON_ROWS} />
@@ -679,7 +1022,19 @@ function QueuePage() {
               jobs={jobs}
               selected={selected}
               activeJobId={sheetJobId}
-              emptyState={isEmpty ? getQueueTabEmptyState(state) : undefined}
+              focusedIndex={focusIndex}
+              onFocusIndex={setFocusIndex}
+              emptyState={
+                isEmpty
+                  ? isSearching
+                    ? {
+                        title: `No jobs match "${debouncedSearch}"`,
+                        description:
+                          "Search checks job IDs, names, failure reasons and payloads. Try another term or switch to the Latest tab.",
+                      }
+                    : getQueueTabEmptyState(state)
+                  : undefined
+              }
               scrollRef={scrollRef}
               onToggleSelect={toggleSelect}
               onToggleSelectAll={toggleSelectAll}
@@ -687,8 +1042,26 @@ function QueuePage() {
             />
           )}
         </div>
-
       </div>
+
+      <AddJobDialog
+        open={addJobOpen}
+        onOpenChange={setAddJobOpen}
+        redisInstanceId={redisInstanceId}
+        queueName={queueName}
+        prefill={addJobPrefill}
+        knownJobNames={knownJobNames}
+        onAdded={(newJobId) => {
+          void queueMetaQuery.refetch();
+          void jobsQuery.refetch();
+          toast("Open the new job?", {
+            action: {
+              label: "Open",
+              onClick: () => openJobSheetRef.current(newJobId),
+            },
+          });
+        }}
+      />
 
       <Sheet
         open={!!sheetJobId}
@@ -711,6 +1084,7 @@ function QueuePage() {
               listJob={sheetListJob}
               canWrite={canWrite}
               onRemoved={closeJobSheet}
+              onEditReplay={openEditReplay}
             />
           )}
         </SheetContent>
@@ -741,4 +1115,3 @@ function QueuePage() {
     </div>
   );
 }
-

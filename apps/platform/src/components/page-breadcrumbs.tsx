@@ -114,10 +114,14 @@ export function PageBreadcrumbs() {
     if (queueName) {
       segments.push({
         label: "Queues",
-        to: "/$workspaceId/$environmentId",
+        to: "/$workspaceId/$environmentId/queues",
         params: { workspaceId, environmentId },
       });
       segments.push({ label: decodeURIComponent(queueName) });
+    } else if (/\/queues\/?$/.test(pathname)) {
+      segments.push({ label: "Queues" });
+    } else if (pathname.endsWith("/stats")) {
+      segments.push({ label: "Stats" });
     } else {
       segments.push({ label: "Overview" });
     }

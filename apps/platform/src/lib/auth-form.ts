@@ -38,3 +38,21 @@ export function isEmailNotVerifiedError(error: unknown): boolean {
     error.code === "EMAIL_NOT_VERIFIED"
   );
 }
+
+const LAST_EMAIL_KEY = "unqueue-last-email";
+
+export function getLastEmail(): string {
+  try {
+    return localStorage.getItem(LAST_EMAIL_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setLastEmail(email: string) {
+  try {
+    localStorage.setItem(LAST_EMAIL_KEY, email);
+  } catch {
+    // storage unavailable; the field simply won't be prefilled next time
+  }
+}

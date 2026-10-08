@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/toaster";
+import { ConfirmProvider } from "@/components/confirm-provider";
 import { RoutePending } from "@/lib/route-pending";
 import { sessionQueryOptions } from "@/lib/session-query";
 import { routeTree } from "./routeTree.gen";
@@ -23,7 +25,10 @@ const router = createRouter({
   defaultPreload: "intent",
   defaultPreloadStaleTime: 0,
   defaultPendingMinMs: 0,
-  defaultPendingMs: 0,
+  // Keep the router's default pending delay. With `defaultPendingMs: 0`, an
+  // auth redirect thrown from the root `beforeLoad` races the instantly-shown
+  // pending UI and React receives `undefined` as the thrown value
+  // ("Uncaught undefined" in MatchInnerImpl), leaving a blank page.
   defaultPendingComponent: RoutePending,
   scrollRestoration: true,
 });
@@ -40,8 +45,11 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <ConfirmProvider>
+          <RouterProvider router={router} />
+        </ConfirmProvider>
       </QueryClientProvider>
+      <Toaster />
     </ThemeProvider>
   </StrictMode>,
 );

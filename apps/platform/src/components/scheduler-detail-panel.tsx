@@ -16,6 +16,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { rpcClient } from "@/lib/api";
+import { useConfirm } from "@/components/confirm-provider";
+import { withToast } from "@/lib/notify";
 import type { SchedulerSummary } from "@unqueue/bullmq";
 import { Badge } from "@unqueue/ui/components/badge";
 import { Button } from "@/components/ui/button";
@@ -98,9 +100,68 @@ export function SchedulerDetailPanel({
     });
   };
 
-  const runAction = async (action: () => Promise<unknown>) => {
-    await action();
+  const confirm = useConfirm();
+
+  const runAction = async (
+    action: () => Promise<unknown>,
+    messages: { success: string; error: string } = {
+      success: "Scheduler updated",
+      error: "Scheduler action failed",
+    },
+  ) => {
+    const ok = await withToast(async () => {
+      await action();
+      return true as const;
+    }, messages);
     invalidateScheduler();
+    return ok === true;
+  };
+
+  const runNow = async () => {
+    const ok = await confirm({
+      title: "Run scheduler now?",
+      description: (
+        <>
+          Enqueues a job from <span className="font-mono">{schedulerId}</span> right away,
+          in addition to its regular schedule.
+        </>
+      ),
+      confirmLabel: "Run now",
+    });
+    if (!ok) return;
+    await runAction(
+      () => rpcClient.scheduler.run({ redisInstanceId, queueName, schedulerId }),
+      { success: "Scheduler triggered", error: "Could not run scheduler" },
+    );
+  };
+
+  const saveEdit = async (updates: { pattern?: string; every?: number }) => {
+    const describe = (pattern?: string | null, every?: number | null) =>
+      pattern ? `cron "${pattern}"` : every ? `every ${every.toLocaleString()}ms` : "—";
+    const ok = await confirm({
+      title: "Change this schedule?",
+      description: (
+        <>
+          <span className="font-mono">{schedulerId}</span> will switch from{" "}
+          <span className="font-mono">{describe(scheduler?.pattern, scheduler?.every)}</span> to{" "}
+          <span className="font-mono">{describe(updates.pattern, updates.every)}</span>. The
+          next run is recalculated immediately.
+        </>
+      ),
+      confirmLabel: "Update schedule",
+    });
+    if (!ok) return;
+    const result = await runAction(
+      () =>
+        rpcClient.scheduler.update({
+          redisInstanceId,
+          queueName,
+          schedulerId,
+          ...updates,
+        }),
+      { success: "Schedule updated", error: "Could not update schedule" },
+    );
+    if (result) setEditOpen(false);
   };
 
   const scheduler = schedulerQuery.data;
@@ -120,15 +181,7 @@ export function SchedulerDetailPanel({
               size="sm"
               variant="outline"
               disabled={isLoading || !scheduler || !canWrite}
-              onClick={() =>
-                void runAction(() =>
-                  rpcClient.scheduler.run({
-                    redisInstanceId,
-                    queueName,
-                    schedulerId,
-                  }),
-                )
-              }
+              onClick={() => void runNow()}
             >
               <PlayCircleIcon />
               Run Now
@@ -284,13 +337,17 @@ export function SchedulerDetailPanel({
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() =>
-                void runAction(() =>
-                  rpcClient.scheduler.remove({
-                    redisInstanceId,
-                    queueName,
-                    schedulerId,
-                  }),
-                ).then(() => onRemoved?.())
+                void runAction(
+                  () =>
+                    rpcClient.scheduler.remove({
+                      redisInstanceId,
+                      queueName,
+                      schedulerId,
+                    }),
+                  { success: "Scheduler removed", error: "Could not remove scheduler" },
+                ).then((removed) => {
+                  if (removed) onRemoved?.();
+                })
               }
             >
               Remove
@@ -305,16 +362,7 @@ export function SchedulerDetailPanel({
         schedulerId={schedulerId}
         initialPattern={scheduler?.pattern}
         initialEvery={scheduler?.every}
-        onSave={(updates) =>
-          void runAction(() =>
-            rpcClient.scheduler.update({
-              redisInstanceId,
-              queueName,
-              schedulerId,
-              ...updates,
-            }),
-          ).then(() => setEditOpen(false))
-        }
+        onSave={(updates) => void saveEdit(updates)}
       />
     </>
   );

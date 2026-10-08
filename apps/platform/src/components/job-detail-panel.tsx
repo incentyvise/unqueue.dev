@@ -1,5 +1,27 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookmarkIcon, CheckIcon, CopyIcon } from "lucide-react";
+import {
+  ArrowUpCircleIcon,
+  BookmarkIcon,
+  CheckIcon,
+  CopyIcon,
+  LinkIcon,
+  MoreHorizontalIcon,
+  PencilLineIcon,
+  RotateCcwIcon,
+  Trash2Icon,
+} from "lucide-react";
+import { toast } from "sonner";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { AddJobPrefill } from "@/components/add-job-dialog";
+import { useHotkeys } from "@/hooks/use-hotkeys";
+import { withToast } from "@/lib/notify";
+import { useConfirm } from "@/components/confirm-provider";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertDialog,
@@ -43,7 +65,7 @@ import {
 } from "@/lib/format-timestamp";
 import { formatJobAttemptsValue } from "@/lib/format-job-attempts";
 
-function CopyButton({ value }: { value: string }) {
+function CopyButton({ value, label = "Copy job ID" }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
@@ -58,7 +80,8 @@ function CopyButton({ value }: { value: string }) {
       type="button"
       onClick={copy}
       className="inline-flex shrink-0 items-center justify-center rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      aria-label={copied ? "Copied" : "Copy job ID"}
+      aria-label={copied ? "Copied" : label}
+      title={label}
     >
       {copied ? (
         <CheckIcon className="size-3 text-emerald-600 dark:text-emerald-400" />
@@ -137,6 +160,7 @@ export function JobDetailPanel({
   listJob,
   canWrite = true,
   onRemoved,
+  onEditReplay,
 }: {
   workspaceId: string;
   environmentId: string;
@@ -146,8 +170,10 @@ export function JobDetailPanel({
   listJob?: JobDetail | JobSummary;
   canWrite?: boolean;
   onRemoved?: () => void;
+  onEditReplay?: (prefill: AddJobPrefill) => void;
 }) {
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [bookmarkPickerOpen, setBookmarkPickerOpen] = useState(false);
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
   const jobInvalidateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -219,9 +245,13 @@ export function JobDetailPanel({
     });
   };
 
-  const runAction = async (action: () => Promise<unknown>) => {
-    await action();
+  const runAction = async (
+    action: () => Promise<unknown>,
+    messages: { success: string; error: string },
+  ) => {
+    const result = await withToast(action, messages);
     invalidateJob();
+    return result;
   };
 
   const job = jobQuery.data;
@@ -232,6 +262,114 @@ export function JobDetailPanel({
   const finished = formatJobTimestamp(job?.finishedOn);
   const maxAttempts = job?.opts?.attempts;
   const logs = job?.logs ?? [];
+  const actionsDisabled = showSummarySkeleton || !job || !canWrite;
+  const hasPayload = !!job && "payload" in job;
+
+  const jobLabel = (
+    <>
+      job <span className="font-mono">#{jobId}</span>
+      {job?.name ? (
+        <>
+          {" "}(<span className="font-mono">{job.name}</span>)
+        </>
+      ) : null}
+    </>
+  );
+
+  const retry = async () => {
+    const ok = await confirm({
+      title: "Retry this job?",
+      description: (
+        <>
+          Moves {jobLabel} back to waiting so a worker runs it again, including any side
+          effects in your job handler.
+        </>
+      ),
+      confirmLabel: "Retry job",
+    });
+    if (!ok) return;
+    await runAction(
+      () => rpcClient.jobActions.retry({ redisInstanceId, queueName, jobId }),
+      { success: `Job #${jobId} queued for retry`, error: "Could not retry job" },
+    );
+  };
+
+  const promote = async () => {
+    const ok = await confirm({
+      title: "Run this delayed job now?",
+      description: (
+        <>Skips the remaining delay on {jobLabel} and moves it to waiting immediately.</>
+      ),
+      confirmLabel: "Run now",
+    });
+    if (!ok) return;
+    await runAction(
+      () => rpcClient.jobActions.promote({ redisInstanceId, queueName, jobId }),
+      { success: `Job #${jobId} promoted`, error: "Could not promote job" },
+    );
+  };
+
+  const replayAsIs = async () => {
+    const ok = await confirm({
+      title: "Replay this job?",
+      description: (
+        <>
+          Enqueues a new job on <span className="font-mono">{queueName}</span> with the
+          same name and payload as {jobLabel}. The original is left as it is.
+        </>
+      ),
+      confirmLabel: "Replay job",
+    });
+    if (!ok) return;
+    await runAction(
+      () => rpcClient.jobActions.replay({ redisInstanceId, queueName, jobId }),
+      { success: "Job replayed as a new job", error: "Could not replay job" },
+    );
+  };
+
+  const editReplay = () => {
+    if (!job || !hasPayload) return;
+    onEditReplay?.({
+      name: job.name,
+      data: (job as JobDetail).payload,
+      attempts: job.opts?.attempts,
+      priority: job.opts?.priority,
+      sourceJobId: job.id,
+    });
+  };
+
+  const copyLink = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("jobId", jobId);
+    void navigator.clipboard
+      .writeText(url.toString())
+      .then(() => toast.success("Job link copied"));
+  };
+
+  const canRetry = job?.state === "failed" || job?.state === "completed";
+  const canPromote = job?.state === "delayed";
+
+  // The job sheet is itself a dialog, so allow overlays — but only act when
+  // the sheet is the sole open overlay (not under a confirm/edit dialog).
+  const sheetOnTop = () =>
+    document.querySelectorAll(
+      '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="menu"][data-state="open"]',
+    ).length <= 1;
+
+  useHotkeys(
+    {
+      r: () => {
+        if (sheetOnTop() && !actionsDisabled && canRetry) void retry();
+      },
+      e: () => {
+        if (sheetOnTop() && !actionsDisabled && onEditReplay) editReplay();
+      },
+      c: () => {
+        if (sheetOnTop()) copyLink();
+      },
+    },
+    { allowInOverlay: true },
+  );
 
   return (
     <>
@@ -241,60 +379,81 @@ export function JobDetailPanel({
             Job <span className="font-mono">{jobId}</span>
           </SheetTitle>
           <div className="flex shrink-0 flex-wrap justify-end gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={showSummarySkeleton || !job || !canWrite}
-              onClick={() => setBookmarkPickerOpen(true)}
-            >
-              <BookmarkIcon />
-              Bookmark
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={showSummarySkeleton || !job || !canWrite}
-              onClick={() =>
-                void runAction(() =>
-                  rpcClient.jobActions.retry({ redisInstanceId, queueName, jobId }),
-                )
-              }
-            >
-              Retry
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={showSummarySkeleton || !job || !canWrite}
-              onClick={() =>
-                void runAction(() =>
-                  rpcClient.jobActions.replay({ redisInstanceId, queueName, jobId }),
-                )
-              }
-            >
-              <CopyIcon />
-              Replay
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={showSummarySkeleton || !job || !canWrite}
-              onClick={() =>
-                void runAction(() =>
-                  rpcClient.jobActions.promote({ redisInstanceId, queueName, jobId }),
-                )
-              }
-            >
-              Promote
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={showSummarySkeleton || !job || !canWrite}
-              onClick={() => setRemoveConfirmOpen(true)}
-            >
-              Remove
-            </Button>
+            {canRetry && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={actionsDisabled}
+                onClick={() => void retry()}
+                title="Retry (r)"
+              >
+                <RotateCcwIcon />
+                Retry
+              </Button>
+            )}
+            {canPromote && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={actionsDisabled}
+                onClick={() => void promote()}
+                title="Run this delayed job now"
+              >
+                <ArrowUpCircleIcon />
+                Run now
+              </Button>
+            )}
+            {onEditReplay && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={actionsDisabled || !hasPayload}
+                onClick={editReplay}
+                title="Edit payload and enqueue a copy (e)"
+              >
+                <PencilLineIcon />
+                Edit &amp; replay
+              </Button>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="outline" className="size-8" aria-label="More job actions">
+                  <MoreHorizontalIcon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={copyLink}>
+                  <LinkIcon />
+                  Copy link
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={actionsDisabled}
+                  onClick={() => setBookmarkPickerOpen(true)}
+                >
+                  <BookmarkIcon />
+                  Bookmark
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={actionsDisabled} onClick={() => void replayAsIs()}>
+                  <CopyIcon />
+                  Replay as-is
+                </DropdownMenuItem>
+                {!canRetry && (
+                  <DropdownMenuItem disabled={actionsDisabled} onClick={() => void retry()}>
+                    <RotateCcwIcon />
+                    Retry
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={actionsDisabled}
+                  onClick={() => setRemoveConfirmOpen(true)}
+                >
+                  <Trash2Icon />
+                  Remove job
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <AlertDialog open={removeConfirmOpen} onOpenChange={setRemoveConfirmOpen}>
               <AlertDialogContent>
                 <AlertDialogHeader>
@@ -308,9 +467,12 @@ export function JobDetailPanel({
                   <AlertDialogAction
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     onClick={() =>
-                      void runAction(() =>
-                        rpcClient.jobActions.remove({ redisInstanceId, queueName, jobId }),
-                      ).then(() => onRemoved?.())
+                      void runAction(
+                        () => rpcClient.jobActions.remove({ redisInstanceId, queueName, jobId }),
+                        { success: `Removed job #${jobId}`, error: "Could not remove job" },
+                      ).then((result) => {
+                        if (result) onRemoved?.();
+                      })
                     }
                   >
                     Remove
@@ -524,7 +686,15 @@ export function JobDetailPanel({
           <Separator />
 
           <section>
-            <h3 className="mb-2 font-medium text-muted-foreground">Payload</h3>
+            <h3 className="mb-2 flex items-center gap-1 font-medium text-muted-foreground">
+              Payload
+              {job && hasPayload && (job as JobDetail).payload != null && (
+                <CopyButton
+                  value={JSON.stringify((job as JobDetail).payload, null, 2)}
+                  label="Copy payload"
+                />
+              )}
+            </h3>
             {isLoadingHeavyFields ? (
               <CodeBlockSkeleton lines={6} />
             ) : job?.payload == null ? (
@@ -545,15 +715,7 @@ export function JobDetailPanel({
             ) : logs.length === 0 ? (
               <p className="text-muted-foreground">No logs</p>
             ) : (
-              <CodeBlock
-                code={logs
-                  .map((log: ParsedLog) =>
-                    log.format === "json" && log.entry
-                      ? `[${log.entry.level}] ${log.entry.message}`
-                      : (log.raw ?? ""),
-                  )
-                  .join("\n")}
-              />
+              <JobLogs logs={logs} />
             )}
           </section>
         </div>
@@ -570,5 +732,92 @@ export function JobDetailPanel({
         canWrite={canWrite}
       />
     </>
+  );
+}
+
+const LOG_LEVEL_CLASS: Record<string, string> = {
+  error: "text-destructive",
+  fatal: "text-destructive",
+  warn: "text-amber-600 dark:text-amber-400",
+  warning: "text-amber-600 dark:text-amber-400",
+  info: "text-sky-600 dark:text-sky-400",
+  debug: "text-muted-foreground",
+  trace: "text-muted-foreground",
+};
+
+function formatLogTime(ts: number) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function JobLogs({ logs }: { logs: ParsedLog[] }) {
+  const [level, setLevel] = useState<string>("all");
+  const levels = [
+    ...new Set(
+      logs
+        .map((log) => (log.format === "json" ? log.entry?.level?.toLowerCase() : undefined))
+        .filter((l): l is string => !!l),
+    ),
+  ];
+  const visible =
+    level === "all"
+      ? logs
+      : logs.filter((log) => log.entry?.level?.toLowerCase() === level);
+
+  return (
+    <div className="space-y-2">
+      {levels.length > 1 && (
+        <div className="flex flex-wrap gap-1">
+          {["all", ...levels].map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => setLevel(l)}
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide transition-colors",
+                level === l
+                  ? "border-border bg-muted text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="max-h-80 overflow-auto rounded-md border bg-muted/30 py-1.5 font-mono text-[11px] leading-relaxed">
+        {visible.map((log, i) =>
+          log.format === "json" && log.entry ? (
+            <div key={i} className="flex gap-2 px-3 hover:bg-muted/60">
+              <span className="shrink-0 text-muted-foreground tabular-nums">
+                {formatLogTime(log.entry.ts)}
+              </span>
+              <span
+                className={cn(
+                  "w-10 shrink-0 uppercase",
+                  LOG_LEVEL_CLASS[log.entry.level.toLowerCase()] ?? "text-muted-foreground",
+                )}
+              >
+                {log.entry.level}
+              </span>
+              <span className="min-w-0 break-words whitespace-pre-wrap">
+                {log.entry.message}
+                {log.entry.metadata && Object.keys(log.entry.metadata).length > 0 && (
+                  <span className="text-muted-foreground"> {JSON.stringify(log.entry.metadata)}</span>
+                )}
+              </span>
+            </div>
+          ) : (
+            <div key={i} className="px-3 break-words whitespace-pre-wrap hover:bg-muted/60">
+              {log.raw}
+            </div>
+          ),
+        )}
+      </div>
+    </div>
   );
 }

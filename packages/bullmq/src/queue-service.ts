@@ -3,7 +3,7 @@ import type { RedisConnection } from "./redis-types.js";
 import { withQueue } from "./queue-runner.js";
 import type { QueuePoolContext } from "./queue-pool-context.js";
 import { jobLogSchema } from "@unqueue/validators";
-import type { FailedJobGroup, JobDetail, JobSummary, ParsedLog, QueueCounts, QueueMeta, SchedulerSummary } from "./types.js";
+import type { FailedJobGroup, JobDetail, JobSearchResult, JobSummary, ParsedLog, QueueCounts, QueueMeta, SchedulerSummary } from "./types.js";
 
 export async function getQueueMeta(
   connection: RedisConnection,
@@ -150,6 +150,73 @@ export async function listJobs(
   );
 }
 
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+const HEX_RE = /\b(?:0x)?[0-9a-f]{12,}\b/gi;
+const QUOTED_RE = /(["'`])(?:(?!\1).){1,80}\1/g;
+const NUMBER_RE = /\d+(?:\.\d+)?/g;
+
+/**
+ * Collapses an error message into a grouping fingerprint by replacing
+ * volatile tokens (ids, numbers, quoted values) with placeholders so that
+ * "Order 123 not found" and "Order 456 not found" land in the same group.
+ */
+export function normalizeErrorMessage(reason: string | undefined): string {
+  if (!reason) return "Unknown error";
+  const firstLine = reason.split("\n")[0]!.trim();
+  return (
+    firstLine
+      .replace(UUID_RE, "<uuid>")
+      .replace(HEX_RE, "<hex>")
+      .replace(QUOTED_RE, "<str>")
+      .replace(NUMBER_RE, "<n>")
+      .replace(/\s+/g, " ")
+      .slice(0, 200) || "Unknown error"
+  );
+}
+
+export function groupFailedJobs(
+  jobs: Array<Pick<Job, "id" | "name" | "finishedOn" | "failedReason" | "stacktrace">>,
+): FailedJobGroup[] {
+  const groups = new Map<string, FailedJobGroup>();
+
+  for (const job of jobs) {
+    const message = normalizeErrorMessage(job.failedReason);
+    const key = `${job.name}\u0000${message}`;
+    const failedAt = job.finishedOn;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.count++;
+      if (job.id) existing.jobIds.push(job.id);
+      if ((failedAt ?? 0) > (existing.latestFailedAt ?? 0)) {
+        existing.latestFailedAt = failedAt;
+        existing.latestJobId = job.id ?? "";
+        existing.failedReason = job.failedReason;
+        existing.stacktrace = job.stacktrace?.length ? job.stacktrace : undefined;
+      }
+      if (failedAt && (!existing.firstFailedAt || failedAt < existing.firstFailedAt)) {
+        existing.firstFailedAt = failedAt;
+      }
+    } else {
+      groups.set(key, {
+        key,
+        name: job.name,
+        message,
+        count: 1,
+        jobIds: job.id ? [job.id] : [],
+        latestJobId: job.id ?? "",
+        latestFailedAt: failedAt,
+        firstFailedAt: failedAt,
+        failedReason: job.failedReason,
+        stacktrace: job.stacktrace?.length ? job.stacktrace : undefined,
+      });
+    }
+  }
+
+  return Array.from(groups.values()).sort(
+    (a, b) => b.count - a.count || (b.latestFailedAt ?? 0) - (a.latestFailedAt ?? 0),
+  );
+}
+
 export async function listFailedJobGroups(
   connection: RedisConnection,
   queueName: string,
@@ -162,33 +229,97 @@ export async function listFailedJobGroups(
     prefix,
     async (queue) => {
       const jobs = await queue.getJobs(["failed"], 0, 999);
-      const groups = new Map<string, FailedJobGroup>();
+      return groupFailedJobs(jobs.filter((job): job is Job => job != null));
+    },
+    pool,
+  );
+}
 
-      for (const job of jobs) {
-        const existing = groups.get(job.name);
-        if (existing) {
-          existing.count++;
-          if ((job.finishedOn ?? 0) > (existing.latestFailedAt ?? 0)) {
-            existing.latestFailedAt = job.finishedOn;
-            existing.latestJobId = job.id ?? "";
-            existing.failedReason = job.failedReason;
-            existing.stacktrace = job.stacktrace?.length
-              ? job.stacktrace
-              : undefined;
-          }
-        } else {
-          groups.set(job.name, {
-            name: job.name,
-            count: 1,
-            latestJobId: job.id ?? "",
-            latestFailedAt: job.finishedOn,
-            failedReason: job.failedReason,
-            stacktrace: job.stacktrace?.length ? job.stacktrace : undefined,
-          });
+const SEARCH_SCAN_LIMIT = 2000;
+/** Lower per-state cap when searching every state at once. */
+const SEARCH_SCAN_LIMIT_ALL = 500;
+/** Payloads larger than this are not text-matched. */
+const SEARCH_MAX_PAYLOAD_CHARS = 20_000;
+
+function jobMatches(job: Job, needle: string): boolean {
+  if (job.id?.toLowerCase().includes(needle)) return true;
+  if (job.name.toLowerCase().includes(needle)) return true;
+  if (job.failedReason?.toLowerCase().includes(needle)) return true;
+  try {
+    const data = JSON.stringify(job.data ?? null);
+    if (
+      data &&
+      data.length <= SEARCH_MAX_PAYLOAD_CHARS &&
+      data.toLowerCase().includes(needle)
+    ) {
+      return true;
+    }
+  } catch {
+    // unserialisable payloads are skipped
+  }
+  return false;
+}
+
+/**
+ * Searches jobs in a state by exact id, id/name substring, failed reason, or
+ * payload text. Scans the newest SEARCH_SCAN_LIMIT jobs per state so a search
+ * never walks an unbounded Redis set.
+ */
+export async function searchJobs(
+  connection: RedisConnection,
+  queueName: string,
+  prefix: string,
+  state: JobListState,
+  query: string,
+  limit = 100,
+  pool?: QueuePoolContext,
+): Promise<JobSearchResult> {
+  const needle = query.trim().toLowerCase();
+  if (!needle || state === "schedulers") {
+    return { jobs: [], scanned: 0, truncated: false };
+  }
+
+  return withQueue(
+    connection,
+    queueName,
+    prefix,
+    async (queue) => {
+      const results: JobSummary[] = [];
+      const seen = new Set<string>();
+
+      const exact = await queue.getJob(query.trim());
+      if (exact?.id) {
+        const exactState = await exact.getState();
+        if (state === "all" || exactState === state) {
+          results.push({ ...toJobSummary(exact), state: exactState });
+          seen.add(exact.id);
         }
       }
 
-      return Array.from(groups.values()).sort((a, b) => b.count - a.count);
+      const states: JobState[] = state === "all" ? [...JOB_STATES] : [state];
+      const scanLimit = state === "all" ? SEARCH_SCAN_LIMIT_ALL : SEARCH_SCAN_LIMIT;
+      let scanned = 0;
+      let truncated = false;
+
+      for (const jobState of states) {
+        if (results.length >= limit) break;
+        const jobs = await queue.getJobs([jobState], 0, scanLimit - 1, false);
+        if (jobs.length >= scanLimit) truncated = true;
+        for (const job of jobs) {
+          if (!job?.id) continue;
+          scanned++;
+          if (seen.has(job.id) || !jobMatches(job, needle)) continue;
+          seen.add(job.id);
+          results.push({ ...toJobSummary(job), state: jobState });
+          if (results.length >= limit) {
+            truncated = true;
+            break;
+          }
+        }
+      }
+
+      results.sort((a, b) => b.timestamp - a.timestamp);
+      return { jobs: results, scanned, truncated };
     },
     pool,
   );

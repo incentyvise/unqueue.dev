@@ -15,6 +15,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    // Pre-bundle up front so Vite doesn't discover these mid-session and
+    // re-optimize, which can leave the page with two copies of React.
+    include: ["recharts", "sonner"],
+  },
   server: {
     port: 5174,
     strictPort: true,

@@ -1,4 +1,5 @@
 import { useForm } from "@tanstack/react-form";
+import { useConfirm } from "@/components/confirm-provider";
 import { useState } from "react";
 import { ChevronDownIcon, Trash2Icon } from "lucide-react";
 import { z } from "zod";
@@ -207,6 +208,7 @@ function RedisConnectionForm({
       !!initialValues.tlsServername,
   );
   const [connectionUrl, setConnectionUrl] = useState("");
+  const confirm = useConfirm();
 
   const deletePhrase =
     instanceNickname != null ? deleteConfirmPhrase(instanceNickname) : "";
@@ -236,6 +238,20 @@ function RedisConnectionForm({
         tlsServername: parsed.data.tlsServername || undefined,
         bullmqPrefix: parsed.data.bullmqPrefix,
       };
+
+      if (mode !== "create" && editingId) {
+        const ok = await confirm({
+          title: "Save connection changes?",
+          description: (
+            <>
+              <span className="font-medium">{payload.nickname}</span> will use the new
+              settings for everyone in this environment right away.
+            </>
+          ),
+          confirmLabel: "Save changes",
+        });
+        if (!ok) return;
+      }
 
       try {
         if (mode === "create") {
