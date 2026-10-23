@@ -18,7 +18,7 @@
     "ioredis": "^5.11.1"
   },
   "devDependencies": {
-    "@types/node": "^24.12.4",
+    "@types/node": "^26.6.4",
     "@unqueue/config": "workspace:*",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

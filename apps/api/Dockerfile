@@ -3,7 +3,7 @@
 
 # syntax=docker/dockerfile:1
 
-FROM node:24-bookworm-slim AS base
+FROM node:26-bookworm-slim AS base
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -26,7 +26,7 @@ ENV NODE_ENV=production
 RUN pnpm exec turbo run build --filter=@unqueue/api \
   && pnpm --filter @unqueue/api deploy --prod /deploy
 
-FROM node:24-bookworm-slim AS runner
+FROM node:26-bookworm-slim AS runner
 RUN apt-get update \
   && apt-get install -y --no-install-recommends dumb-init \
   && rm -rf /var/lib/apt/lists/*
