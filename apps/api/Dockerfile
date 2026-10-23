@@ -7,7 +7,8 @@ FROM node:26-bookworm-slim AS base
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && corepack prepare pnpm@11.5.3 --activate
+# Node 25+ no longer bundles corepack; install pnpm directly (keep in sync with packageManager).
+RUN npm install -g pnpm@11.5.3
 WORKDIR /app
 
 FROM base AS pruner
